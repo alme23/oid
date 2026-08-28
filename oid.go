@@ -1,4 +1,5 @@
-// oid.go - с полностью ручной ASN.1 кодировкой
+// Package oid provides functionality for working with Object Identifiers (OID).
+// This file contains the core OID implementation.
 package oid
 
 import (
@@ -16,13 +17,26 @@ const (
 // OID представляет Object Identifier
 type OID []uint32
 
-// ParseOID создает OID без выделения промежуточных срезов строк
-func ParseOID(s string) (OID, error) {
-	if s == "" {
-		return nil, fmt.Errorf("пустой OID")
+// combinedFirstComponents вычисляет объединенное значение первых двух компонентов
+// с проверкой на переполнение
+func combinedFirstComponents(first, second uint32) (uint32, error) {
+	// Используем uint64 для промежуточных вычислений
+	combined := uint64(first)*40 + uint64(second)
+
+	// Проверяем, что значение помещается в uint32
+	if combined > uint64(^uint32(0)) {
+		return 0, fmt.Errorf("%w: %d*40 + %d", ErrComponentTooBig, first, second)
 	}
 
-	// Считаем точки
+	return uint32(combined), nil
+}
+
+// ParseOID создает OID без выделения промежуточных срезов строк
+func ParseOID(s string) (oid OID, err error) {
+	if s == "" {
+		return nil, ErrEmptyOID
+	}
+
 	dots := 0
 	for i := 0; i < len(s); i++ {
 		if s[i] == '.' {
@@ -30,24 +44,30 @@ func ParseOID(s string) (OID, error) {
 		}
 	}
 
-	oid := make(OID, 0, dots+1)
+	oid = make(OID, 0, dots+1)
 	start := 0
 
 	for i := 0; i <= len(s); i++ {
-		if i == len(s) || s[i] == '.' {
-			part := s[start:i]
-			if part == "" {
-				return nil, fmt.Errorf("некорректный OID: %s", s)
-			}
-
-			num, err := strconv.ParseUint(part, 10, 32)
-			if err != nil {
-				return nil, fmt.Errorf("некорректный компонент OID '%s': %v", part, err)
-			}
-
-			oid = append(oid, uint32(num))
-			start = i + 1
+		if i < len(s) && s[i] != '.' {
+			continue
 		}
+
+		part := s[start:i]
+		if part == "" {
+			return nil, fmt.Errorf("%w: %s", ErrInvalidOID, s)
+		}
+
+		num, err := strconv.ParseUint(part, 10, 32)
+		if err != nil {
+			return nil, fmt.Errorf("некорректный компонент OID '%s': %w", part, err)
+		}
+
+		if num > MaxOIDComponent {
+			return nil, fmt.Errorf("%w: %s", ErrComponentTooBig, part)
+		}
+
+		oid = append(oid, uint32(num))
+		start = i + 1
 	}
 
 	if err := oid.Validate(); err != nil {
@@ -72,7 +92,7 @@ func (o OID) String() string {
 		return ""
 	}
 
-	size := len(o) - 1 // точки
+	size := len(o) - 1
 	for _, v := range o {
 		size += digitCount(v)
 	}
@@ -90,56 +110,23 @@ func (o OID) String() string {
 	return builder.String()
 }
 
-// digitCount возвращает количество цифр в числе
-func digitCount(n uint32) int {
-	if n < 10 {
-		return 1
-	}
-	if n < 100 {
-		return 2
-	}
-	if n < 1000 {
-		return 3
-	}
-	if n < 10000 {
-		return 4
-	}
-	if n < 100000 {
-		return 5
-	}
-	if n < 1000000 {
-		return 6
-	}
-	if n < 10000000 {
-		return 7
-	}
-	if n < 100000000 {
-		return 8
-	}
-	if n < 1000000000 {
-		return 9
-	}
-	return 10
-}
-
 // Validate проверяет корректность OID
-func (o OID) Validate() error {
+func (o OID) Validate() (err error) {
 	if len(o) < 2 {
-		return fmt.Errorf("OID должен содержать минимум 2 компонента")
+		return ErrOIDTooShort
 	}
 
-	if o[0] > 2 {
-		return fmt.Errorf("первый компонент OID должен быть 0, 1 или 2")
-	}
-
-	if o[0] < 2 && o[1] > 39 {
-		return fmt.Errorf("второй компонент должен быть <= 39 при первом компоненте 0 или 1")
+	switch {
+	case o[0] > 2:
+		return ErrFirstComponentTooBig
+	case o[0] < 2 && o[1] > 39:
+		return ErrSecondComponentTooBig
 	}
 
 	for i, component := range o {
 		if component > MaxOIDComponent {
-			return fmt.Errorf("компонент %d (%d) превышает максимальное значение ASN.1 (%d)",
-				i, component, MaxOIDComponent)
+			return fmt.Errorf("%w: компонент %d (%d), максимум %d",
+				ErrComponentTooBig, i, component, MaxOIDComponent)
 		}
 	}
 
@@ -154,7 +141,7 @@ func (o OID) Equal(other OID) bool {
 	if len(o) == 0 {
 		return true
 	}
-	_ = o[len(other)-1] // BCE оптимизация
+	_ = o[len(other)-1]
 	for i := range o {
 		if o[i] != other[i] {
 			return false
@@ -171,7 +158,7 @@ func (o OID) StartsWith(prefix OID) bool {
 	if len(prefix) == 0 {
 		return true
 	}
-	_ = o[len(prefix)-1] // BCE оптимизация
+	_ = o[len(prefix)-1]
 	for i := range prefix {
 		if o[i] != prefix[i] {
 			return false
@@ -188,24 +175,24 @@ func (o OID) Append(components ...uint32) OID {
 }
 
 // Parent возвращает родительский OID (без последнего компонента)
-func (o OID) Parent() (OID, error) {
+func (o OID) Parent() (parent OID, err error) {
 	if len(o) <= 1 {
-		return nil, fmt.Errorf("у OID нет родителя")
+		return nil, ErrNoParent
 	}
 	return o[:len(o)-1], nil
 }
 
 // Last возвращает последний компонент OID
-func (o OID) Last() (uint32, error) {
+func (o OID) Last() (component uint32, err error) {
 	if len(o) == 0 {
-		return 0, fmt.Errorf("пустой OID")
+		return 0, ErrEmptyOID
 	}
 	return o[len(o)-1], nil
 }
 
 // ToASN1 конвертирует OID в asn1.ObjectIdentifier
-func (o OID) ToASN1() asn1.ObjectIdentifier {
-	result := make(asn1.ObjectIdentifier, len(o))
+func (o OID) ToASN1() (result asn1.ObjectIdentifier) {
+	result = make(asn1.ObjectIdentifier, len(o))
 	for i, v := range o {
 		result[i] = int(v)
 	}
@@ -213,8 +200,8 @@ func (o OID) ToASN1() asn1.ObjectIdentifier {
 }
 
 // FromASN1 конвертирует asn1.ObjectIdentifier в OID
-func FromASN1(asn1OID asn1.ObjectIdentifier) OID {
-	result := make(OID, len(asn1OID))
+func FromASN1(asn1OID asn1.ObjectIdentifier) (result OID) {
+	result = make(OID, len(asn1OID))
 	for i, v := range asn1OID {
 		result[i] = uint32(v)
 	}
@@ -222,41 +209,29 @@ func FromASN1(asn1OID asn1.ObjectIdentifier) OID {
 }
 
 // MarshalBinary реализует encoding.BinaryMarshaler
-// Полностью ручная ASN.1 кодировка для максимальной производительности
-func (o OID) MarshalBinary() ([]byte, error) {
+func (o OID) MarshalBinary() (data []byte, err error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
 	}
 
-	// Вычисляем размер содержимого
-	contentSize := 0
+	firstCombined, err := combinedFirstComponents(o[0], o[1])
+	if err != nil {
+		return nil, err
+	}
 
-	// Первые два компонента
-	first := 40*int(o[0]) + int(o[1])
-	contentSize += base128Size(uint32(first))
-
-	// Остальные компоненты
+	contentSize := base128Size(firstCombined)
 	for i := 2; i < len(o); i++ {
 		contentSize += base128Size(o[i])
 	}
 
-	// Вычисляем общий размер: tag(1) + length(1-2) + content
 	totalSize := 1 + lengthSize(contentSize) + contentSize
-
-	// Выделяем память один раз
 	result := make([]byte, totalSize)
 
-	// Записываем тег
-	result[0] = 0x06 // OID tag
-
-	// Записываем длину
+	result[0] = 0x06
 	pos := 1
 	pos += writeLength(result[pos:], contentSize)
+	pos += writeBase128(result[pos:], firstCombined)
 
-	// Записываем первые два компонента
-	pos += writeBase128(result[pos:], uint32(first))
-
-	// Записываем остальные компоненты
 	for i := 2; i < len(o); i++ {
 		pos += writeBase128(result[pos:], o[i])
 	}
@@ -264,134 +239,54 @@ func (o OID) MarshalBinary() ([]byte, error) {
 	return result, nil
 }
 
-// base128Size возвращает количество байт для base-128 кодирования
-func base128Size(value uint32) int {
-	if value < 128 {
-		return 1
-	}
-	if value < 16384 {
-		return 2
-	}
-	if value < 2097152 {
-		return 3
-	}
-	if value < 268435456 {
-		return 4
-	}
-	return 5
-}
-
-// lengthSize возвращает количество байт для кодирования длины
-func lengthSize(length int) int {
-	if length < 128 {
-		return 1
-	}
-	if length < 256 {
-		return 2
-	}
-	return 3
-}
-
-// writeBase128 записывает число в base-128 формате
-func writeBase128(dst []byte, value uint32) int {
-	if value < 128 {
-		dst[0] = byte(value)
-		return 1
-	}
-
-	// Временный буфер
-	var temp [5]byte
-	i := len(temp)
-
-	for value > 0 {
-		i--
-		temp[i] = byte(value & 0x7F)
-		value >>= 7
-	}
-
-	// Устанавливаем continuation bit для всех кроме последнего
-	for j := i; j < len(temp)-1; j++ {
-		temp[j] |= 0x80
-	}
-
-	// Копируем в destination
-	copy(dst, temp[i:])
-	return len(temp) - i
-}
-
-// writeLength записывает длину в ASN.1 формате
-func writeLength(dst []byte, length int) int {
-	if length < 128 {
-		dst[0] = byte(length)
-		return 1
-	}
-
-	if length < 256 {
-		dst[0] = 0x81
-		dst[1] = byte(length)
-		return 2
-	}
-
-	dst[0] = 0x82
-	dst[1] = byte(length >> 8)
-	dst[2] = byte(length)
-	return 3
-}
-
 // UnmarshalBinary реализует encoding.BinaryUnmarshaler
-// Полностью ручная ASN.1 декодировка для максимальной производительности
-func (o *OID) UnmarshalBinary(data []byte) error {
+func (o *OID) UnmarshalBinary(data []byte) (err error) {
 	if len(data) < 2 {
-		return fmt.Errorf("данные слишком короткие для OID")
+		return ErrDataTooShort
 	}
 
 	if data[0] != 0x06 {
-		return fmt.Errorf("некорректный тег ASN.1: 0x%02x, ожидался 0x06 (OID)", data[0])
+		return fmt.Errorf("%w: 0x%02x, ожидался 0x06 (OID)", ErrInvalidASN1Tag, data[0])
 	}
 
-	// Декодируем длину
 	contentSize, lengthBytes := readLength(data[1:])
 	if lengthBytes == 0 {
-		return fmt.Errorf("некорректная длина ASN.1")
+		return ErrInvalidASN1Length
 	}
 
-	if len(data) < 1+lengthBytes+contentSize {
-		return fmt.Errorf("недостаточно данных для OID")
+	totalLen := 1 + lengthBytes + contentSize
+	if len(data) < totalLen {
+		return ErrInsufficientData
 	}
 
-	content := data[1+lengthBytes : 1+lengthBytes+contentSize]
-
-	// Оцениваем количество компонентов
+	content := data[1+lengthBytes : totalLen]
 	estimatedComponents := contentSize/2 + 1
 	oid := make(OID, 0, estimatedComponents)
 
-	// Декодируем первый компонент (объединенные первые два)
 	first, bytesRead := readBase128(content)
 	if bytesRead == 0 {
-		return fmt.Errorf("некорректный первый компонент OID")
+		return ErrInvalidFirstComponent
 	}
 
-	// Разделяем первые два компонента
-	if first < 40 {
+	switch {
+	case first < 40:
 		oid = append(oid, 0, first)
-	} else if first < 80 {
+	case first < 80:
 		oid = append(oid, 1, first-40)
-	} else {
+	default:
 		oid = append(oid, 2, first-80)
 	}
 
-	// Декодируем остальные компоненты
 	pos := bytesRead
 	for pos < len(content) {
 		component, read := readBase128(content[pos:])
 		if read == 0 {
-			return fmt.Errorf("некорректный компонент OID")
+			return ErrInvalidComponent
 		}
 		oid = append(oid, component)
 		pos += read
 	}
 
-	// Проверяем валидность
 	if err := oid.Validate(); err != nil {
 		return err
 	}
@@ -400,57 +295,13 @@ func (o *OID) UnmarshalBinary(data []byte) error {
 	return nil
 }
 
-// readBase128 читает число из base-128 формата
-func readBase128(data []byte) (uint32, int) {
-	var result uint32
-	bytesRead := 0
-
-	for _, b := range data {
-		if bytesRead >= 5 {
-			return 0, 0 // Слишком длинное число
-		}
-
-		result = (result << 7) | uint32(b&0x7F)
-		bytesRead++
-
-		if b&0x80 == 0 {
-			return result, bytesRead
-		}
-	}
-
-	return 0, 0 // Незавершенная последовательность
-}
-
-// readLength читает длину ASN.1
-func readLength(data []byte) (int, int) {
-	if len(data) == 0 {
-		return 0, 0
-	}
-
-	if data[0] < 0x80 {
-		return int(data[0]), 1
-	}
-
-	numBytes := int(data[0] & 0x7F)
-	if numBytes == 0 || numBytes > 4 || len(data) < 1+numBytes {
-		return 0, 0
-	}
-
-	length := 0
-	for i := 1; i <= numBytes; i++ {
-		length = (length << 8) | int(data[i])
-	}
-
-	return length, 1 + numBytes
-}
-
 // MarshalJSON реализует json.Marshaler
-func (o OID) MarshalJSON() ([]byte, error) {
+func (o OID) MarshalJSON() (data []byte, err error) {
 	if len(o) == 0 {
 		return []byte(`""`), nil
 	}
 
-	size := len(o) + 2 // кавычки и точки
+	size := len(o) + 2
 	for _, v := range o {
 		size += digitCount(v)
 	}
@@ -469,9 +320,9 @@ func (o OID) MarshalJSON() ([]byte, error) {
 }
 
 // UnmarshalJSON реализует json.Unmarshaler
-func (o *OID) UnmarshalJSON(data []byte) error {
+func (o *OID) UnmarshalJSON(data []byte) (err error) {
 	if len(data) < 2 || data[0] != '"' || data[len(data)-1] != '"' {
-		return fmt.Errorf("некорректный JSON тип для OID")
+		return ErrInvalidJSONType
 	}
 
 	s := string(data[1 : len(data)-1])
@@ -481,4 +332,152 @@ func (o *OID) UnmarshalJSON(data []byte) error {
 	}
 	*o = parsed
 	return nil
+}
+
+// digitCount возвращает количество цифр в числе
+func digitCount(n uint32) (count int) {
+	switch {
+	case n < 10:
+		return 1
+	case n < 100:
+		return 2
+	case n < 1000:
+		return 3
+	case n < 10000:
+		return 4
+	case n < 100000:
+		return 5
+	case n < 1000000:
+		return 6
+	case n < 10000000:
+		return 7
+	case n < 100000000:
+		return 8
+	case n < 1000000000:
+		return 9
+	default:
+		return 10
+	}
+}
+
+// base128Size возвращает количество байт для base-128 кодирования
+func base128Size(value uint32) (size int) {
+	switch {
+	case value < 128:
+		return 1
+	case value < 16384:
+		return 2
+	case value < 2097152:
+		return 3
+	case value < 268435456:
+		return 4
+	default:
+		return 5
+	}
+}
+
+// lengthSize возвращает количество байт для кодирования длины
+func lengthSize(length int) (size int) {
+	switch {
+	case length < 128:
+		return 1 // Короткая форма: 1 байт
+	case length < 256:
+		return 2 // 0x81 + 1 байт
+	case length < 65536:
+		return 3 // 0x82 + 2 байта
+	default:
+		return 4 // 0x83 + 3 байта
+	}
+}
+
+// writeBase128 записывает число в base-128 формате
+func writeBase128(dst []byte, value uint32) (bytesWritten int) {
+	if value < 128 {
+		dst[0] = byte(value)
+		return 1
+	}
+
+	var temp [5]byte
+	i := len(temp)
+
+	for value > 0 && i > 0 {
+		i--
+		temp[i] = byte(value & 0x7F)
+		value >>= 7
+	}
+
+	for j := i; j < len(temp)-1; j++ {
+		temp[j] |= 0x80
+	}
+
+	copy(dst, temp[i:])
+	return len(temp) - i
+}
+
+// writeLength записывает длину в ASN.1 формате
+func writeLength(dst []byte, length int) (bytesWritten int) {
+	if length < 128 {
+		dst[0] = byte(length)
+		return 1
+	}
+
+	if length < 256 {
+		dst[0] = 0x81
+		dst[1] = byte(length)
+		return 2
+	}
+
+	dst[0] = 0x82
+	dst[1] = byte(length >> 8)
+	dst[2] = byte(length)
+	return 3
+}
+
+// readBase128 читает число из base-128 формата
+func readBase128(data []byte) (value uint32, bytesRead int) {
+	for _, b := range data {
+		if bytesRead >= 5 {
+			return 0, 0
+		}
+
+		value = (value << 7) | uint32(b&0x7F)
+		bytesRead++
+
+		if b&0x80 == 0 {
+			return value, bytesRead
+		}
+	}
+
+	return 0, 0
+}
+
+// readLength читает длину ASN.1
+func readLength(data []byte) (length int, bytesRead int) {
+	if len(data) == 0 {
+		return 0, 0
+	}
+
+	if data[0] < 0x80 {
+		return int(data[0]), 1
+	}
+
+	numBytes := int(data[0] & 0x7F)
+	if numBytes == 0 || numBytes > 4 {
+		return 0, 0
+	}
+
+	requiredLen := 1 + numBytes
+	if len(data) < requiredLen {
+		return 0, 0
+	}
+
+	length = 0
+	for _, b := range data[1:requiredLen] {
+		if length > (int(^uint(0)>>1) >> 8) {
+			return 0, 0
+		}
+		length = (length << 8) | int(b)
+	}
+
+	return length, requiredLen
 }

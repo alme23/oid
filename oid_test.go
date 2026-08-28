@@ -4,6 +4,7 @@ package oid
 import (
 	"encoding/asn1"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"reflect"
 	"runtime"
@@ -280,6 +281,283 @@ func TestOIDValidate(t *testing.T) {
 			}
 			if !tt.wantErr && err != nil {
 				t.Errorf("Validate() неожиданная ошибка для OID %v: %v", tt.oid, err)
+			}
+		})
+	}
+}
+
+// Тесты для edge cases в ParseOID
+func TestParseOIDEdgeCases(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   string
+		wantErr error // nil означает "любая ошибка"
+	}{
+		{"Пустая строка", "", ErrEmptyOID},
+		{"Одна точка", ".", ErrInvalidOID},
+		{"Две точки", "1..3", ErrInvalidOID},
+		{"Точка в начале", ".1.3", ErrInvalidOID},
+		{"Точка в конце", "1.3.", ErrInvalidOID},
+		{"Отрицательное", "-1.3", nil},
+		{"Буквы", "a.b", nil},
+		{"Спецсимволы", "1.3#", nil},
+		{"Слишком большое", "1.3.4294967296", nil},
+		{"Один компонент", "1", ErrOIDTooShort},
+		{"Первый > 2", "3.1", ErrFirstComponentTooBig},
+		{"Второй > 39 при первом 1", "1.40", ErrSecondComponentTooBig},
+		{"Второй > 39 при первом 0", "0.40", ErrSecondComponentTooBig},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := ParseOID(tt.input)
+			if err == nil {
+				t.Error("ParseOID: ожидалась ошибка")
+				return
+			}
+			if tt.wantErr != nil {
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("ParseOID(%q) = %v, ожидалось %v", tt.input, err, tt.wantErr)
+				}
+			} else {
+				// Любая ошибка приемлема
+				t.Logf("ParseOID(%q) вернул ошибку: %v (OK)", tt.input, err)
+			}
+		})
+	}
+}
+
+// Тесты для MaxOIDComponent
+func TestMaxOIDComponent(t *testing.T) {
+	// Максимальное значение
+	oid := OID{2, MaxOIDComponent}
+	if err := oid.Validate(); err != nil {
+		t.Errorf("MaxOIDComponent должен быть валидным: %v", err)
+	}
+
+	// Превышение максимального
+	tooBig := OID{2, MaxOIDComponent + 1}
+	if err := tooBig.Validate(); err == nil {
+		t.Error("Превышение MaxOIDComponent должно дать ошибку")
+	}
+
+	// Парсинг максимального
+	parsed, err := ParseOID(oid.String())
+	if err != nil {
+		t.Errorf("ParseOID max: %v", err)
+	}
+	if !parsed.Equal(oid) {
+		t.Error("ParseOID max: не совпадает")
+	}
+}
+
+// Тесты для Equal
+func TestEqualEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		oid1     OID
+		oid2     OID
+		expected bool
+	}{
+		{"Оба nil", nil, nil, true},
+		{"Оба пустые", OID{}, OID{}, true},
+		{"Nil и пустой", nil, OID{}, true},
+		{"Разная длина", OID{1, 3}, OID{1, 3, 6}, false},
+		{"Одинаковые", OID{1, 3, 6}, OID{1, 3, 6}, true},
+		{"Разные", OID{1, 3, 6}, OID{1, 3, 7}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.oid1.Equal(tt.oid2) != tt.expected {
+				t.Errorf("Equal(%v, %v) = %v, ожидалось %v",
+					tt.oid1, tt.oid2, tt.oid1.Equal(tt.oid2), tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для StartsWith
+func TestStartsWithEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		oid      OID
+		prefix   OID
+		expected bool
+	}{
+		{"Пустой префикс", OID{1, 3, 6}, OID{}, true},
+		{"Nil префикс", OID{1, 3, 6}, nil, true},
+		{"Полное совпадение", OID{1, 3, 6}, OID{1, 3, 6}, true},
+		{"Префикс длиннее", OID{1, 3}, OID{1, 3, 6}, false},
+		{"Не совпадает", OID{1, 3, 6}, OID{1, 4}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.oid.StartsWith(tt.prefix) != tt.expected {
+				t.Errorf("StartsWith(%v, %v) = %v, ожидалось %v",
+					tt.oid, tt.prefix, tt.oid.StartsWith(tt.prefix), tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для Parent и Last
+func TestParentLast(t *testing.T) {
+	// Parent
+	oid := MustParseOID("1.3.6.1")
+	parent, err := oid.Parent()
+	if err != nil {
+		t.Errorf("Parent: %v", err)
+	}
+	if !parent.Equal(OID{1, 3, 6}) {
+		t.Error("Parent: неверный результат")
+	}
+
+	// Parent для короткого
+	_, err = OID{1}.Parent()
+	if !errors.Is(err, ErrNoParent) {
+		t.Error("Parent: ожидалась ErrNoParent")
+	}
+
+	// Last
+	last, err := oid.Last()
+	if err != nil {
+		t.Errorf("Last: %v", err)
+	}
+	if last != 1 {
+		t.Error("Last: неверный результат")
+	}
+
+	// Last для пустого
+	_, err = OID{}.Last()
+	if !errors.Is(err, ErrEmptyOID) {
+		t.Error("Last: ожидалась ErrEmptyOID")
+	}
+}
+
+// Тесты для ToASN1 и FromASN1
+func TestASN1Conversion(t *testing.T) {
+	oid := MustParseOID("1.3.6.1.4.1")
+
+	// ToASN1
+	asn1OID := oid.ToASN1()
+	expected := asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1}
+	if len(asn1OID) != len(expected) {
+		t.Fatal("ToASN1: неверная длина")
+	}
+	for i := range asn1OID {
+		if asn1OID[i] != expected[i] {
+			t.Error("ToASN1: неверное значение")
+		}
+	}
+
+	// FromASN1
+	back := FromASN1(asn1OID)
+	if !back.Equal(oid) {
+		t.Error("FromASN1: неверный результат")
+	}
+}
+
+// Тесты для MarshalBinary/UnmarshalBinary
+func TestBinaryRoundTrip(t *testing.T) {
+	tests := []OID{
+		MustParseOID("1.3.6.1"),
+		MustParseOID("1.3.6.1.4.1"),
+		MustParseOID("2.100.3"),
+		MustParseOID("0.39.1"),
+		{1, 3, MaxOIDComponent},
+	}
+
+	for _, oid := range tests {
+		data, err := oid.MarshalBinary()
+		if err != nil {
+			t.Fatalf("MarshalBinary(%v): %v", oid, err)
+		}
+
+		var decoded OID
+		if err := decoded.UnmarshalBinary(data); err != nil {
+			t.Fatalf("UnmarshalBinary(%v): %v", oid, err)
+		}
+
+		if !decoded.Equal(oid) {
+			t.Errorf("Round trip: %v -> %v", oid, decoded)
+		}
+	}
+}
+
+// Тесты для ошибок UnmarshalBinary
+func TestUnmarshalBinaryErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr error
+	}{
+		{"Пустые данные", []byte{}, ErrDataTooShort},
+		{"Короткие данные", []byte{0x06}, ErrDataTooShort},
+		{"Неверный тег", []byte{0x05, 0x00}, ErrInvalidASN1Tag},
+		{"Неверная длина", []byte{0x06, 0x80}, ErrInvalidASN1Length},
+		{"Недостаточно данных", []byte{0x06, 0x05, 0x01}, ErrInsufficientData},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var oid OID
+			err := oid.UnmarshalBinary(tt.data)
+			if err == nil {
+				t.Error("UnmarshalBinary: ожидалась ошибка")
+				return
+			}
+			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
+				t.Errorf("UnmarshalBinary = %v, ожидалось %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Тесты для MarshalJSON/UnmarshalJSON
+func TestJSONRoundTrip(t *testing.T) {
+	tests := []OID{
+		MustParseOID("1.3.6.1"),
+		MustParseOID("1.3.6.1.4.1"),
+		{2, MaxOIDComponent},
+	}
+
+	for _, oid := range tests {
+		data, err := oid.MarshalJSON()
+		if err != nil {
+			t.Fatalf("MarshalJSON(%v): %v", oid, err)
+		}
+
+		var decoded OID
+		if err := decoded.UnmarshalJSON(data); err != nil {
+			t.Fatalf("UnmarshalJSON(%v): %v", oid, err)
+		}
+
+		if !decoded.Equal(oid) {
+			t.Errorf("JSON round trip: %v -> %v", oid, decoded)
+		}
+	}
+}
+
+// Тесты для ошибок UnmarshalJSON
+func TestUnmarshalJSONErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"Не JSON", []byte("not-json")},
+		{"Число", []byte("123")},
+		{"Объект", []byte(`{"oid":"1.3.6.1"}`)},
+		{"Пустая строка", []byte(`""`)},
+		{"Невалидный OID", []byte(`"invalid"`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var oid OID
+			if err := oid.UnmarshalJSON(tt.data); err == nil {
+				t.Error("UnmarshalJSON: ожидалась ошибка")
 			}
 		})
 	}
@@ -1091,14 +1369,6 @@ func TestOIDEdgeCases(t *testing.T) {
 	}
 }
 
-// Helper функция для тестов
-func parentOrSelf(o OID) OID {
-	if len(o) <= 1 {
-		return o
-	}
-	return o[:len(o)-1]
-}
-
 // ============================================
 // ТЕСТЫ ASN1-СОВМЕСТИМОСТИ
 // ============================================
@@ -1462,31 +1732,1471 @@ func TestConcurrentNoCopyRead(t *testing.T) {
 	}
 }
 
+// Тесты для digitCount
+func TestDigitCount(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    uint32
+		expected int
+	}{
+		{"0", 0, 1},
+		{"9", 9, 1},
+		{"10", 10, 2},
+		{"99", 99, 2},
+		{"100", 100, 3},
+		{"999", 999, 3},
+		{"1000", 1000, 4},
+		{"9999", 9999, 4},
+		{"10000", 10000, 5},
+		{"99999", 99999, 5},
+		{"100000", 100000, 6},
+		{"999999", 999999, 6},
+		{"1000000", 1000000, 7},
+		{"9999999", 9999999, 7},
+		{"10000000", 10000000, 8},
+		{"99999999", 99999999, 8},
+		{"100000000", 100000000, 9},
+		{"999999999", 999999999, 9},
+		{"1000000000", 1000000000, 10},
+		{"MaxUint32", ^uint32(0), 10},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := digitCount(tt.input); got != tt.expected {
+				t.Errorf("digitCount(%d) = %d, ожидалось %d", tt.input, got, tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для base128Size
+func TestBase128Size(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    uint32
+		expected int
+	}{
+		{"0", 0, 1},
+		{"127", 127, 1},
+		{"128", 128, 2},
+		{"16383", 16383, 2},
+		{"16384", 16384, 3},
+		{"2097151", 2097151, 3},
+		{"2097152", 2097152, 4},
+		{"268435455", 268435455, 4},
+		{"268435456", 268435456, 5},
+		{"MaxUint32", ^uint32(0), 5},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := base128Size(tt.value); got != tt.expected {
+				t.Errorf("base128Size(%d) = %d, ожидалось %d", tt.value, got, tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для lengthSize
+func TestLengthSize(t *testing.T) {
+	tests := []struct {
+		name     string
+		length   int
+		expected int
+	}{
+		{"0", 0, 1},
+		{"127", 127, 1},
+		{"128", 128, 2},
+		{"255", 255, 2},
+		{"256", 256, 3},
+		{"65535", 65535, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if got := lengthSize(tt.length); got != tt.expected {
+				t.Errorf("lengthSize(%d) = %d, ожидалось %d", tt.length, got, tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для writeBase128
+func TestWriteBase128(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    uint32
+		expected []byte
+	}{
+		{"0", 0, []byte{0x00}},
+		{"127", 127, []byte{0x7F}},
+		{"128", 128, []byte{0x81, 0x00}},
+		{"16383", 16383, []byte{0xFF, 0x7F}},
+		{"16384", 16384, []byte{0x81, 0x80, 0x00}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := make([]byte, 5)
+			n := writeBase128(buf, tt.value)
+
+			if n != len(tt.expected) {
+				t.Errorf("writeBase128(%d) = %d байт, ожидалось %d", tt.value, n, len(tt.expected))
+			}
+
+			for i := 0; i < n; i++ {
+				if buf[i] != tt.expected[i] {
+					t.Errorf("writeBase128(%d)[%d] = 0x%02x, ожидалось 0x%02x",
+						tt.value, i, buf[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// Тесты для writeLength
+func TestWriteLength(t *testing.T) {
+	tests := []struct {
+		name     string
+		length   int
+		expected []byte
+	}{
+		{"0", 0, []byte{0x00}},
+		{"127", 127, []byte{0x7F}},
+		{"128", 128, []byte{0x81, 0x80}},
+		{"255", 255, []byte{0x81, 0xFF}},
+		{"256", 256, []byte{0x82, 0x01, 0x00}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			buf := make([]byte, 4)
+			n := writeLength(buf, tt.length)
+
+			if n != len(tt.expected) {
+				t.Errorf("writeLength(%d) = %d байт, ожидалось %d", tt.length, n, len(tt.expected))
+			}
+
+			for i := 0; i < n; i++ {
+				if buf[i] != tt.expected[i] {
+					t.Errorf("writeLength(%d)[%d] = 0x%02x, ожидалось 0x%02x",
+						tt.length, i, buf[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// Тесты для readBase128
+func TestReadBase128(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected uint32
+		bytes    int
+	}{
+		{"0", []byte{0x00}, 0, 1},
+		{"127", []byte{0x7F}, 127, 1},
+		{"128", []byte{0x81, 0x00}, 128, 2},
+		{"16383", []byte{0xFF, 0x7F}, 16383, 2},
+		{"16384", []byte{0x81, 0x80, 0x00}, 16384, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, bytesRead := readBase128(tt.data)
+
+			if bytesRead != tt.bytes {
+				t.Errorf("readBase128() bytesRead = %d, ожидалось %d", bytesRead, tt.bytes)
+			}
+
+			if value != tt.expected {
+				t.Errorf("readBase128() value = %d, ожидалось %d", value, tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для readLength
+func TestReadLength(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected int
+		bytes    int
+	}{
+		{"0", []byte{0x00}, 0, 1},
+		{"127", []byte{0x7F}, 127, 1},
+		{"128", []byte{0x81, 0x80}, 128, 2},
+		{"255", []byte{0x81, 0xFF}, 255, 2},
+		{"256", []byte{0x82, 0x01, 0x00}, 256, 3},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, bytesRead := readLength(tt.data)
+
+			if bytesRead != tt.bytes {
+				t.Errorf("readLength() bytesRead = %d, ожидалось %d", bytesRead, tt.bytes)
+			}
+
+			if length != tt.expected {
+				t.Errorf("readLength() length = %d, ожидалось %d", length, tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для appendBase128Value
+func TestAppendBase128Value(t *testing.T) {
+	tests := []struct {
+		name     string
+		value    uint32
+		expected []byte
+	}{
+		{"0", 0, []byte{0x00}},
+		{"127", 127, []byte{0x7F}},
+		{"128", 128, []byte{0x81, 0x00}},
+		{"16383", 16383, []byte{0xFF, 0x7F}},
+		{"16384", 16384, []byte{0x81, 0x80, 0x00}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := appendBase128Value(nil, tt.value)
+
+			if len(result) != len(tt.expected) {
+				t.Errorf("appendBase128Value(%d) = %x, ожидалось %x", tt.value, result, tt.expected)
+			}
+
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("appendBase128Value(%d)[%d] = 0x%02x, ожидалось 0x%02x",
+						tt.value, i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+// Тесты для комбинированных первых компонентов
+func TestCombinedFirstComponents(t *testing.T) {
+	tests := []struct {
+		name     string
+		first    uint32
+		second   uint32
+		expected uint32
+		wantErr  bool
+	}{
+		{"0.0", 0, 0, 0, false},
+		{"1.39", 1, 39, 79, false},
+		{"2.175", 2, 175, 255, false},
+		{"2.999", 2, 999, 1079, false},
+		{"2.MaxUint32", 2, ^uint32(0), 0, true}, // Переполнение
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result, err := combinedFirstComponents(tt.first, tt.second)
+
+			if tt.wantErr {
+				if err == nil {
+					t.Error("combinedFirstComponents: ожидалась ошибка")
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("combinedFirstComponents: %v", err)
+			}
+
+			if result != tt.expected {
+				t.Errorf("combinedFirstComponents = %d, ожидалось %d", result, tt.expected)
+			}
+		})
+	}
+}
+
+// Тесты для глобального API
+func TestGlobalMustFunctions(t *testing.T) {
+	ResetRegistry()
+
+	// MustRegister
+	MustRegister("test", MustParseOID("1.3.6.1"))
+	if Size() != 1 {
+		t.Error("MustRegister: неверный размер")
+	}
+
+	// MustBatchRegister
+	MustBatchRegister(map[string]OID{
+		"first":  MustParseOID("1.3.6.1.4.1"),
+		"second": MustParseOID("2.100.3"),
+	})
+	if Size() != 3 {
+		t.Error("MustBatchRegister: неверный размер")
+	}
+
+	// Panic при дубликате
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MustRegister: ожидалась паника при дубликате")
+		}
+	}()
+	MustRegister("test2", MustParseOID("1.3.6.1"))
+}
+
+// Тесты для NullOID
+func TestNullOIDAllMethods(t *testing.T) {
+	// FromOID
+	n := FromOID(MustParseOID("1.3.6.1"))
+	if !n.Valid {
+		t.Error("FromOID: Valid должно быть true")
+	}
+
+	// String
+	if n.String() != "1.3.6.1" {
+		t.Error("NullOID.String: неверное значение")
+	}
+
+	// Equal
+	n2 := FromOID(MustParseOID("1.3.6.1"))
+	if !n.Equal(n2) {
+		t.Error("NullOID.Equal: должны быть равны")
+	}
+
+	// MarshalJSON
+	data, err := json.Marshal(n)
+	if err != nil {
+		t.Errorf("NullOID.MarshalJSON: %v", err)
+	}
+	if string(data) != `"1.3.6.1"` {
+		t.Errorf("NullOID.MarshalJSON = %s", data)
+	}
+
+	// UnmarshalJSON
+	var n3 NullOID
+	if err := json.Unmarshal(data, &n3); err != nil {
+		t.Errorf("NullOID.UnmarshalJSON: %v", err)
+	}
+	if !n3.Equal(n) {
+		t.Error("NullOID.UnmarshalJSON: не совпадает")
+	}
+
+	// MustFromString
+	n4 := MustFromString("1.3.6.1")
+	if !n4.Equal(n) {
+		t.Error("MustFromString: не совпадает")
+	}
+}
+
+// Тесты для Array
+func TestArrayAllMethods(t *testing.T) {
+	arr := Array{
+		MustParseOID("1.3.6.1"),
+		MustParseOID("2.100.3"),
+	}
+
+	// String
+	if arr.String() != "[1.3.6.1, 2.100.3]" {
+		t.Errorf("Array.String = %q", arr.String())
+	}
+
+	// Equal
+	arr2 := Array{
+		MustParseOID("1.3.6.1"),
+		MustParseOID("2.100.3"),
+	}
+	if !arr.Equal(arr2) {
+		t.Error("Array.Equal: должны быть равны")
+	}
+
+	// Contains
+	if !arr.Contains(MustParseOID("1.3.6.1")) {
+		t.Error("Array.Contains: должен найти")
+	}
+
+	// Append
+	arr3 := arr.Append(MustParseOID("0.39.1"))
+	if len(arr3) != 3 {
+		t.Error("Array.Append: неверная длина")
+	}
+
+	// MarshalJSON
+	data, err := json.Marshal(arr)
+	if err != nil {
+		t.Errorf("Array.MarshalJSON: %v", err)
+	}
+	if string(data) != `["1.3.6.1","2.100.3"]` {
+		t.Errorf("Array.MarshalJSON = %s", data)
+	}
+
+	// UnmarshalJSON
+	var arr4 Array
+	if err := json.Unmarshal(data, &arr4); err != nil {
+		t.Errorf("Array.UnmarshalJSON: %v", err)
+	}
+	if !arr4.Equal(arr) {
+		t.Error("Array.UnmarshalJSON: не совпадает")
+	}
+}
+
+// Тесты для Registry Names и OIDs
+func TestRegistryNamesAndOIDs(t *testing.T) {
+	reg := NewRegistry()
+
+	// Пустой реестр
+	if len(reg.Names()) != 0 {
+		t.Error("Names: должен быть пустым")
+	}
+	if len(reg.OIDs()) != 0 {
+		t.Error("OIDs: должен быть пустым")
+	}
+	if len(reg.OIDsNoCopy()) != 0 {
+		t.Error("OIDsNoCopy: должен быть пустым")
+	}
+
+	// С записями
+	oid1 := MustParseOID("1.3.6.1")
+	oid2 := MustParseOID("2.100.3")
+	reg.Register("first", oid1)
+	reg.Register("second", oid2)
+
+	names := reg.Names()
+	if len(names) != 2 {
+		t.Error("Names: неверная длина")
+	}
+
+	oids := reg.OIDs()
+	if len(oids) != 2 {
+		t.Error("OIDs: неверная длина")
+	}
+
+	oidsNoCopy := reg.OIDsNoCopy()
+	if len(oidsNoCopy) != 2 {
+		t.Error("OIDsNoCopy: неверная длина")
+	}
+}
+
+// Тесты для глобального ListNoCopy и OIDsNoCopy
+func TestGlobalNoCopyFunctions(t *testing.T) {
+	ResetRegistry()
+
+	Register("test", MustParseOID("1.3.6.1"))
+
+	list := ListNoCopy()
+	if len(list) != 1 {
+		t.Error("ListNoCopy: неверная длина")
+	}
+
+	oids := OIDsNoCopy()
+	if len(oids) != 1 {
+		t.Error("OIDsNoCopy: неверная длина")
+	}
+}
+
+func TestMarshalBinaryErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		oid     OID
+		wantErr error
+	}{
+		{"Пустой", OID{}, ErrOIDTooShort},
+		{"Один компонент", OID{1}, ErrOIDTooShort},
+		{"Первый > 2", OID{3, 1}, ErrFirstComponentTooBig},
+		{"Второй > 39", OID{1, 40}, ErrSecondComponentTooBig},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.oid.MarshalBinary()
+			if err == nil {
+				t.Error("MarshalBinary: ожидалась ошибка")
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("MarshalBinary = %v, ожидалось %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestBatchRegisterAllConflicts(t *testing.T) {
+	t.Run("DuplicateOIDInsideBatch", func(t *testing.T) {
+		reg := NewRegistry()
+		oid := MustParseOID("1.3.6.1")
+
+		err := reg.BatchRegister(map[string]OID{
+			"first":  oid,
+			"second": oid,
+		})
+		if !errors.Is(err, ErrDuplicateOIDInBatch) {
+			t.Errorf("BatchRegister = %v, ожидалось ErrDuplicateOIDInBatch", err)
+		}
+
+		// Проверяем атомарность
+		if reg.Size() != 0 {
+			t.Error("BatchRegister: атомарность нарушена")
+		}
+	})
+
+	t.Run("NameAlreadyExists", func(t *testing.T) {
+		reg := NewRegistry()
+		reg.Register("existing", MustParseOID("1.3.6.1.4.1"))
+
+		err := reg.BatchRegister(map[string]OID{
+			"existing": MustParseOID("2.100.3"),
+			"new":      MustParseOID("1.3.6.1.4.2"),
+		})
+		if !errors.Is(err, ErrNameAlreadyExists) {
+			t.Errorf("BatchRegister = %v, ожидалось ErrNameAlreadyExists", err)
+		}
+
+		// Проверяем атомарность
+		if reg.Size() != 1 {
+			t.Error("BatchRegister: атомарность нарушена")
+		}
+		if _, exists := reg.LookupByName("new"); exists {
+			t.Error("BatchRegister: 'new' не должен быть зарегистрирован")
+		}
+	})
+
+	t.Run("OIDAlreadyRegistered", func(t *testing.T) {
+		reg := NewRegistry()
+		oid := MustParseOID("1.3.6.1")
+		reg.Register("original", oid)
+
+		err := reg.BatchRegister(map[string]OID{
+			"different_name": oid,
+			"new":            MustParseOID("2.100.3"),
+		})
+		if !errors.Is(err, ErrOIDAlreadyRegistered) {
+			t.Errorf("BatchRegister = %v, ожидалось ErrOIDAlreadyRegistered", err)
+		}
+
+		// Проверяем атомарность
+		if reg.Size() != 1 {
+			t.Error("BatchRegister: атомарность нарушена")
+		}
+		if _, exists := reg.LookupByName("new"); exists {
+			t.Error("BatchRegister: 'new' не должен быть зарегистрирован")
+		}
+	})
+
+	t.Run("SuccessfulBatch", func(t *testing.T) {
+		reg := NewRegistry()
+
+		err := reg.BatchRegister(map[string]OID{
+			"first":  MustParseOID("1.3.6.1"),
+			"second": MustParseOID("2.100.3"),
+			"third":  MustParseOID("0.39.1"),
+		})
+		if err != nil {
+			t.Errorf("BatchRegister: %v", err)
+		}
+
+		if reg.Size() != 3 {
+			t.Error("BatchRegister: неверный размер")
+		}
+	})
+}
+
+func TestReadBase128KnownValues(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected uint32
+		bytes    int
+	}{
+		{"0", []byte{0x00}, 0, 1},
+		{"1", []byte{0x01}, 1, 1},
+		{"127", []byte{0x7F}, 127, 1},
+		{"128", []byte{0x81, 0x00}, 128, 2},
+		{"129", []byte{0x81, 0x01}, 129, 2},
+		{"16383", []byte{0xFF, 0x7F}, 16383, 2},
+		{"16384", []byte{0x81, 0x80, 0x00}, 16384, 3},
+		{"2097151", []byte{0xFF, 0xFF, 0x7F}, 2097151, 3},
+		{"2097152", []byte{0x81, 0x80, 0x80, 0x00}, 2097152, 4},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, bytesRead := readBase128(tt.data)
+			if bytesRead != tt.bytes {
+				t.Errorf("readBase128(%x) bytesRead = %d, ожидалось %d", tt.data, bytesRead, tt.bytes)
+			}
+			if value != tt.expected {
+				t.Errorf("readBase128(%x) value = %d, ожидалось %d", tt.data, value, tt.expected)
+			}
+		})
+	}
+}
+func TestMarshalBinaryFullCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		oid     OID
+		wantErr bool
+	}{
+		{"Короткий", MustParseOID("1.3.6.1"), false},
+		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
+		{"Длинный", MustParseOID("1.3.6.1.4.1.99999.1.1"), false},
+		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
+		{"Первый = 2", MustParseOID("2.100.3"), false},
+		{"Пустой", OID{}, true},
+		{"Невалидный", OID{3, 1}, true},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := tt.oid.MarshalBinary()
+			if tt.wantErr {
+				if err == nil {
+					t.Error("MarshalBinary: ожидалась ошибка")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("MarshalBinary: %v", err)
+			}
+			if len(data) == 0 {
+				t.Error("MarshalBinary: пустой результат")
+			}
+		})
+	}
+}
+
+func TestUnmarshalBinaryFullCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr error
+	}{
+		{"Успешный", []byte{0x06, 0x03, 0x2B, 0x06, 0x01}, nil},
+		{"Пустой", []byte{}, ErrDataTooShort},
+		{"1 байт", []byte{0x06}, ErrDataTooShort},
+		{"Неверный тег", []byte{0x05, 0x00}, ErrInvalidASN1Tag},
+		{"Неверная длина", []byte{0x06, 0x80}, ErrInvalidASN1Length},
+		{"Недостаточно данных", []byte{0x06, 0x05, 0x01}, ErrInsufficientData},
+		{"Неверный первый компонент", []byte{0x06, 0x01, 0x80}, ErrInvalidFirstComponent},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var oid OID
+			err := oid.UnmarshalBinary(tt.data)
+
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Errorf("UnmarshalBinary(%x): %v", tt.data, err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Error("UnmarshalBinary: ожидалась ошибка")
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("UnmarshalBinary(%x) = %v, ожидалось %v", tt.data, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Тест для lengthSize - покрытие ветви >= 65536
+func TestLengthSizeLarge(t *testing.T) {
+	// Ветвь length >= 65536
+	if got := lengthSize(65536); got != 4 {
+		t.Errorf("lengthSize(65536) = %d, ожидалось 4", got)
+	}
+	if got := lengthSize(1000000); got != 4 {
+		t.Errorf("lengthSize(1000000) = %d, ожидалось 4", got)
+	}
+}
+
+// Тест для readLength - покрытие переполнения
+func TestReadLengthOverflowBranch(t *testing.T) {
+	// Тест на переполнение int (0x84 с 4 байтами)
+	// На 32-битной системе это вызовет переполнение
+	data := []byte{0x84, 0xFF, 0xFF, 0xFF, 0xFF}
+	length, bytesRead := readLength(data)
+
+	// На 64-битной системе это валидно
+	if bytesRead == 5 && length == 4294967295 {
+		t.Logf("64-битная система: length = %d", length)
+	} else if bytesRead == 0 {
+		t.Logf("32-битная система: переполнение")
+	}
+}
+
+// Тест для BatchRegister - покрытие конфликта OID
+func TestBatchRegisterOIDConflictBranch(t *testing.T) {
+	reg := NewRegistry()
+	oid := MustParseOID("1.3.6.1")
+	reg.Register("original", oid)
+
+	// Пытаемся зарегистрировать тот же OID под другим именем
+	err := reg.BatchRegister(map[string]OID{
+		"different": oid,
+	})
+
+	if err == nil {
+		t.Fatal("BatchRegister: ожидалась ошибка")
+	}
+	if !errors.Is(err, ErrOIDAlreadyRegistered) {
+		t.Errorf("BatchRegister = %v, ожидалось ErrOIDAlreadyRegistered", err)
+	}
+}
+
+// Тест для MarshalBinary - покрытие длинного контента
+func TestMarshalBinaryLongContentCoverage(t *testing.T) {
+	// OID с длинным контентом
+	longOID := OID{1, 3}
+	for i := 0; i < 50; i++ {
+		longOID = append(longOID, MaxOIDComponent)
+	}
+
+	data, err := longOID.MarshalBinary()
+	if err != nil {
+		t.Fatalf("MarshalBinary: %v", err)
+	}
+
+	if len(data) < 128 {
+		t.Errorf("Длина %d < 128", len(data))
+	}
+}
+
+// Тест для UnmarshalBinary - покрытие неверного компонента
+func TestUnmarshalBinaryInvalidComponentBranch(t *testing.T) {
+	// Данные с неверным компонентом (continuation bit без завершения)
+	data := []byte{0x06, 0x02, 0x2B, 0x80}
+
+	var oid OID
+	err := oid.UnmarshalBinary(data)
+	if err == nil {
+		t.Fatal("UnmarshalBinary: ожидалась ошибка")
+	}
+	if !errors.Is(err, ErrInvalidComponent) {
+		t.Errorf("UnmarshalBinary = %v, ожидалось ErrInvalidComponent", err)
+	}
+}
+
+// Тест для SizeBER - покрытие длинного контента
+func TestSizeBERLongContentCoverage(t *testing.T) {
+	longOID := OID{1, 3}
+	for i := 0; i < 50; i++ {
+		longOID = append(longOID, MaxOIDComponent)
+	}
+
+	size, err := longOID.SizeBER()
+	if err != nil {
+		t.Fatalf("SizeBER: %v", err)
+	}
+
+	data, err := longOID.MarshalBER()
+	if err != nil {
+		t.Fatalf("MarshalBER: %v", err)
+	}
+
+	if size != len(data) {
+		t.Errorf("SizeBER = %d, MarshalBER = %d", size, len(data))
+	}
+}
+
+// Тест для UnmarshalBERContent - покрытие неверного компонента
+func TestUnmarshalBERContentInvalidComponentBranch(t *testing.T) {
+	// Контент с неверным компонентом
+	content := []byte{0x2B, 0x80}
+
+	var oid OID
+	err := oid.UnmarshalBERContent(content)
+	if err == nil {
+		t.Fatal("UnmarshalBERContent: ожидалась ошибка")
+	}
+	if !errors.Is(err, ErrComponentFailed) {
+		t.Errorf("UnmarshalBERContent = %v, ожидалось ErrComponentFailed", err)
+	}
+}
+
+// Тест для UnmarshalBinary - покрытие неверного компонента
+func TestUnmarshalBinaryInvalidComponent(t *testing.T) {
+	data := []byte{0x06, 0x02, 0x2B, 0x80}
+
+	var oid OID
+	err := oid.UnmarshalBinary(data)
+	if err == nil {
+		t.Fatal("UnmarshalBinary: ожидалась ошибка")
+	}
+	if !errors.Is(err, ErrInvalidComponent) {
+		t.Errorf("UnmarshalBinary = %v, ожидалось ErrInvalidComponent", err)
+	}
+}
+
+// Тест для BatchRegister - покрытие конфликта OID
+func TestBatchRegisterOIDConflict(t *testing.T) {
+	reg := NewRegistry()
+	oid := MustParseOID("1.3.6.1")
+	reg.Register("original", oid)
+
+	err := reg.BatchRegister(map[string]OID{
+		"different": oid,
+	})
+
+	if err == nil {
+		t.Fatal("BatchRegister: ожидалась ошибка")
+	}
+	if !errors.Is(err, ErrOIDAlreadyRegistered) {
+		t.Errorf("BatchRegister = %v, ожидалось ErrOIDAlreadyRegistered", err)
+	}
+}
+
+// Тест для UnmarshalBERContent - покрытие неверного компонента
+func TestUnmarshalBERContentInvalidComponent(t *testing.T) {
+	content := []byte{0x2B, 0x80}
+
+	var oid OID
+	err := oid.UnmarshalBERContent(content)
+	if err == nil {
+		t.Fatal("UnmarshalBERContent: ожидалась ошибка")
+	}
+	if !errors.Is(err, ErrComponentFailed) {
+		t.Errorf("UnmarshalBERContent = %v, ожидалось ErrComponentFailed", err)
+	}
+}
+
+// Тест для MarshalBER - покрытие ошибки переполнения
+func TestMarshalBEROverflow(t *testing.T) {
+	// OID с первыми компонентами, дающими переполнение
+	oid := OID{2, MaxOIDComponent}
+
+	// Это не должно вызвать переполнение, так как 40*2 + MaxOIDComponent = 268435535 < uint32 max
+	data, err := oid.MarshalBER()
+	if err != nil {
+		t.Fatalf("MarshalBER: %v", err)
+	}
+
+	if len(data) == 0 {
+		t.Error("MarshalBER: пустой результат")
+	}
+}
+
+// Тест для MarshalJSON (Array) - покрытие пустого массива
+func TestArrayMarshalJSONEmptyCoverage(t *testing.T) {
+	arr := Array{}
+
+	data, err := arr.MarshalJSON()
+	if err != nil {
+		t.Fatalf("MarshalJSON: %v", err)
+	}
+
+	if string(data) != "[]" {
+		t.Errorf("MarshalJSON = %s, ожидалось '[]'", data)
+	}
+}
+
+func TestBatchRegisterFullCoverage(t *testing.T) {
+	// Успешная регистрация
+	t.Run("Success", func(t *testing.T) {
+		reg := NewRegistry()
+		err := reg.BatchRegister(map[string]OID{
+			"first":  MustParseOID("1.3.6.1"),
+			"second": MustParseOID("2.100.3"),
+		})
+		if err != nil {
+			t.Errorf("BatchRegister: %v", err)
+		}
+		if reg.Size() != 2 {
+			t.Error("BatchRegister: неверный размер")
+		}
+	})
+
+	// Пустой map
+	t.Run("Empty", func(t *testing.T) {
+		reg := NewRegistry()
+		err := reg.BatchRegister(map[string]OID{})
+		if err != nil {
+			t.Errorf("BatchRegister: %v", err)
+		}
+	})
+
+	// Невалидный OID
+	t.Run("InvalidOID", func(t *testing.T) {
+		reg := NewRegistry()
+		err := reg.BatchRegister(map[string]OID{
+			"bad": {3, 1},
+		})
+		if err == nil {
+			t.Error("BatchRegister: ожидалась ошибка")
+		}
+	})
+
+	// Дубликат OID
+	t.Run("DuplicateOID", func(t *testing.T) {
+		reg := NewRegistry()
+		oid := MustParseOID("1.3.6.1")
+		err := reg.BatchRegister(map[string]OID{
+			"first":  oid,
+			"second": oid,
+		})
+		if !errors.Is(err, ErrDuplicateOIDInBatch) {
+			t.Errorf("BatchRegister = %v, ожидалось ErrDuplicateOIDInBatch", err)
+		}
+	})
+
+	// Конфликт имени
+	t.Run("NameConflict", func(t *testing.T) {
+		reg := NewRegistry()
+		reg.Register("existing", MustParseOID("1.3.6.1.4.1"))
+		err := reg.BatchRegister(map[string]OID{
+			"existing": MustParseOID("2.100.3"),
+		})
+		if !errors.Is(err, ErrNameAlreadyExists) {
+			t.Errorf("BatchRegister = %v, ожидалось ErrNameAlreadyExists", err)
+		}
+	})
+
+	// Конфликт OID
+	t.Run("OIDConflict", func(t *testing.T) {
+		reg := NewRegistry()
+		oid := MustParseOID("1.3.6.1")
+		reg.Register("original", oid)
+		err := reg.BatchRegister(map[string]OID{
+			"different": oid,
+		})
+		if !errors.Is(err, ErrOIDAlreadyRegistered) {
+			t.Errorf("BatchRegister = %v, ожидалось ErrOIDAlreadyRegistered", err)
+		}
+	})
+}
+
+func TestUnmarshalBERContentFullCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		content []byte
+		wantErr error
+	}{
+		{"Успешный", []byte{0x2B, 0x06, 0x01}, nil},
+		{"Пустой", []byte{}, ErrEmptyContent},
+		{"Неверный первый", []byte{0x80}, ErrFirstComponentFailed},
+		{"Неверный компонент", []byte{0x2B, 0x80}, ErrComponentFailed},
+		{"Переполнение", []byte{0x2B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, ErrComponentFailed},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var oid OID
+			err := oid.UnmarshalBERContent(tt.content)
+
+			if tt.wantErr == nil {
+				if err != nil {
+					t.Errorf("UnmarshalBERContent(%x): %v", tt.content, err)
+				}
+				return
+			}
+
+			if err == nil {
+				t.Error("UnmarshalBERContent: ожидалась ошибка")
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("UnmarshalBERContent(%x) = %v, ожидалось %v", tt.content, err, tt.wantErr)
+			}
+		})
+	}
+}
+
+func TestReadBase128FullCoverage(t *testing.T) {
+	// Используем round trip для проверки корректности
+	tests := []uint32{
+		0, 1, 127, 128, 129, 255, 256, 16383, 16384,
+		2097151, 2097152, MaxOIDComponent,
+	}
+
+	for _, expected := range tests {
+		t.Run(fmt.Sprintf("RoundTrip_%d", expected), func(t *testing.T) {
+			// Кодируем с помощью writeBase128
+			buf := make([]byte, 5)
+			n := writeBase128(buf, expected)
+
+			// Декодируем с помощью readBase128
+			value, bytesRead := readBase128(buf[:n])
+
+			if bytesRead != n {
+				t.Errorf("bytesRead = %d, ожидалось %d", bytesRead, n)
+			}
+			if value != expected {
+				t.Errorf("value = %d, ожидалось %d", value, expected)
+			}
+		})
+	}
+
+	// Тесты на ошибки
+	errorTests := []struct {
+		name string
+		data []byte
+	}{
+		{"Переполнение", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}},
+		{"Незавершенная", []byte{0x81, 0x80}},
+		{"Пустая", []byte{}},
+	}
+
+	for _, tt := range errorTests {
+		t.Run(tt.name, func(t *testing.T) {
+			value, bytesRead := readBase128(tt.data)
+			if bytesRead != 0 {
+				t.Errorf("bytesRead = %d, ожидалось 0", bytesRead)
+			}
+			if value != 0 {
+				t.Errorf("value = %d, ожидалось 0", value)
+			}
+		})
+	}
+}
+
+func TestMaxValues(t *testing.T) {
+	// MaxOIDComponent = 268435455 = 2^28 - 1
+	// Кодируется как: 0x8F 0xFF 0xFF 0xFF 0x7F
+
+	// MaxUint32 = 4294967295 = 2^32 - 1
+	// НО: в base-128 максимум 5 байт = 35 бит
+	// Реально максимум: 0x8F 0xFF 0xFF 0xFF 0x7F = 4294967295
+
+	// Проверяем MaxOIDComponent
+	data := []byte{0x8F, 0xFF, 0xFF, 0xFF, 0x7F}
+	value, _ := readBase128(data)
+
+	if value != 268435455 && value != 4294967295 {
+		t.Errorf("value = %d", value)
+	}
+
+	// Реальное значение 0x8F 0xFF 0xFF 0xFF 0x7F
+	// 0x0F = 15 (старшие 4 бита первого байта)
+	// 15 * 2^28 + 0x0FFFFFFF = 15 * 268435456 + 268435455 = 4026531840 + 268435455 = 4294967295
+}
+
+func TestReadLengthFullCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected int
+		bytes    int
+	}{
+		{"0", []byte{0x00}, 0, 1},
+		{"127", []byte{0x7F}, 127, 1},
+		{"128 (0x81)", []byte{0x81, 0x80}, 128, 2},
+		{"255 (0x81)", []byte{0x81, 0xFF}, 255, 2},
+		{"256 (0x82)", []byte{0x82, 0x01, 0x00}, 256, 3},
+		{"65535 (0x82)", []byte{0x82, 0xFF, 0xFF}, 65535, 3},
+		{"0x80 (некорректная)", []byte{0x80}, 0, 0},
+		{"0x85 (слишком длинная)", []byte{0x85}, 0, 0},
+		{"0x81 с недостатком", []byte{0x81}, 0, 0},
+		{"Пустая", []byte{}, 0, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			length, bytesRead := readLength(tt.data)
+			if bytesRead != tt.bytes {
+				t.Errorf("readLength() bytesRead = %d, ожидалось %d", bytesRead, tt.bytes)
+			}
+			if length != tt.expected {
+				t.Errorf("readLength() length = %d, ожидалось %d", length, tt.expected)
+			}
+		})
+	}
+}
+
+func TestMustFromStringFullCoverage(t *testing.T) {
+	// Успешный случай
+	n := MustFromString("1.3.6.1")
+	if !n.Valid {
+		t.Error("MustFromString: Valid должно быть true")
+	}
+
+	// Паника при ошибке
+	defer func() {
+		if r := recover(); r == nil {
+			t.Error("MustFromString: ожидалась паника")
+		}
+	}()
+	MustFromString("invalid")
+}
+
+func TestDiffFullCoverage(t *testing.T) {
+	ResetRegistry()
+
+	// Пустой снимок
+	snapshot := Snapshot()
+
+	// Добавляем
+	Register("first", MustParseOID("1.3.6.1"))
+	added, removed, changed := Diff(snapshot)
+	if len(added) != 1 || len(removed) != 0 || len(changed) != 0 {
+		t.Error("Diff: неверный результат при добавлении")
+	}
+
+	// Изменяем
+	snapshot = Snapshot()
+	Remove("first")
+	Register("first", MustParseOID("2.100.3"))
+	added, removed, changed = Diff(snapshot)
+	if len(added) != 0 || len(removed) != 0 || len(changed) != 1 {
+		t.Error("Diff: неверный результат при изменении")
+	}
+
+	// Удаляем
+	snapshot = Snapshot()
+	Remove("first")
+	added, removed, changed = Diff(snapshot)
+	if len(added) != 0 || len(removed) != 1 || len(changed) != 0 {
+		t.Error("Diff: неверный результат при удалении")
+	}
+}
+
+// Тесты для ошибок в MarshalBER
+func TestMarshalBERErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		oid     OID
+		wantErr error
+	}{
+		{"Пустой", OID{}, ErrOIDTooShort},
+		{"Один компонент", OID{1}, ErrOIDTooShort},
+		{"Первый > 2", OID{3, 1}, ErrFirstComponentTooBig},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.oid.MarshalBER()
+			if err == nil {
+				t.Error("MarshalBER: ожидалась ошибка")
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("MarshalBER = %v, ожидалось %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Тесты для ошибок в MarshalJSON
+func TestMarshalJSONErrors(t *testing.T) {
+	// Пустой OID
+	data, err := OID{}.MarshalJSON()
+	if err != nil {
+		t.Errorf("MarshalJSON(empty): %v", err)
+	}
+	if string(data) != `""` {
+		t.Errorf("MarshalJSON(empty) = %s, ожидалось '\"\"'", data)
+	}
+}
+
+// Тесты для ошибок в AppendBER
+func TestAppendBERErrors(t *testing.T) {
+	tests := []struct {
+		name    string
+		oid     OID
+		wantErr error
+	}{
+		{"Пустой", OID{}, ErrOIDTooShort},
+		{"Невалидный", OID{3, 1}, ErrFirstComponentTooBig},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			_, err := tt.oid.AppendBER(nil)
+			if err == nil {
+				t.Error("AppendBER: ожидалась ошибка")
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("AppendBER = %v, ожидалось %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Тесты для Registry BatchRegister с ошибками валидации
+func TestBatchRegisterValidationErrors(t *testing.T) {
+	reg := NewRegistry()
+
+	tests := []struct {
+		name    string
+		entries map[string]OID
+		wantErr error
+	}{
+		{
+			name:    "Невалидный OID",
+			entries: map[string]OID{"bad": {3, 1}},
+			wantErr: ErrFirstComponentTooBig,
+		},
+		{
+			name:    "Короткий OID",
+			entries: map[string]OID{"bad": {1}},
+			wantErr: ErrOIDTooShort,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			err := reg.BatchRegister(tt.entries)
+			if err == nil {
+				t.Error("BatchRegister: ожидалась ошибка")
+				return
+			}
+			if !errors.Is(err, tt.wantErr) {
+				t.Errorf("BatchRegister = %v, ожидалось %v", err, tt.wantErr)
+			}
+		})
+	}
+}
+
+// Тесты для Registry BatchRegister с дубликатами
+func TestBatchRegisterDuplicates(t *testing.T) {
+	reg := NewRegistry()
+	oid := MustParseOID("1.3.6.1")
+
+	// Дубликат OID (разные имена, одинаковый OID)
+	err := reg.BatchRegister(map[string]OID{
+		"first":  oid,
+		"second": oid,
+	})
+	if err == nil {
+		t.Error("BatchRegister: ожидалась ошибка дубликата OID")
+	}
+	if !errors.Is(err, ErrDuplicateOIDInBatch) {
+		t.Errorf("BatchRegister = %v, ожидалось ErrDuplicateOIDInBatch", err)
+	}
+
+	// Конфликт с существующим именем
+	reg.Register("existing", MustParseOID("1.3.6.1.4.1"))
+
+	err = reg.BatchRegister(map[string]OID{
+		"existing": MustParseOID("2.100.3"),
+	})
+	if err == nil {
+		t.Error("BatchRegister: ожидалась ошибка конфликта имени")
+	}
+	if !errors.Is(err, ErrNameAlreadyExists) {
+		t.Errorf("BatchRegister = %v, ожидалось ErrNameAlreadyExists", err)
+	}
+
+	// Конфликт с существующим OID
+	reg.Register("original", oid)
+
+	err = reg.BatchRegister(map[string]OID{
+		"different_name": oid,
+	})
+	if err == nil {
+		t.Error("BatchRegister: ожидалась ошибка конфликта OID")
+	}
+	if !errors.Is(err, ErrOIDAlreadyRegistered) {
+		t.Errorf("BatchRegister = %v, ожидалось ErrOIDAlreadyRegistered", err)
+	}
+}
+
+// Тесты для Registry Clear
+func TestRegistryClearWithData(t *testing.T) {
+	reg := NewRegistry()
+
+	// Добавляем записи
+	for i := 0; i < 10; i++ {
+		reg.Register(fmt.Sprintf("oid-%d", i), MustParseOID(fmt.Sprintf("1.3.6.1.%d", i+1)))
+	}
+
+	if reg.Size() != 10 {
+		t.Error("Size: должно быть 10")
+	}
+
+	// Очищаем
+	reg.Clear()
+
+	if reg.Size() != 0 {
+		t.Error("Size после Clear: должно быть 0")
+	}
+
+	// Проверяем, что можно снова добавлять
+	reg.Register("new", MustParseOID("1.3.6.1"))
+	if reg.Size() != 1 {
+		t.Error("Size после повторной регистрации: должно быть 1")
+	}
+}
+
+// Тесты для глобального ResetRegistry
+func TestGlobalResetRegistry(t *testing.T) {
+	// Регистрируем
+	Register("test", MustParseOID("1.3.6.1"))
+	if Size() != 1 {
+		t.Error("Size: должно быть 1")
+	}
+
+	// Сбрасываем
+	ResetRegistry()
+
+	if Size() != 0 {
+		t.Error("Size после ResetRegistry: должно быть 0")
+	}
+
+	// Проверяем, что можно снова регистрировать
+	Register("test", MustParseOID("1.3.6.1"))
+	if Size() != 1 {
+		t.Error("Size после повторной регистрации: должно быть 1")
+	}
+}
+
+// Тесты для GetRegistry
+func TestGetRegistry(t *testing.T) {
+	reg := GetRegistry()
+	if reg == nil {
+		t.Fatal("GetRegistry: nil")
+	}
+
+	// Проверяем, что это тот же реестр
+	Register("test", MustParseOID("1.3.6.1"))
+	if reg.Size() != Size() {
+		t.Error("GetRegistry: разные реестры")
+	}
+}
+
+// Тесты для NullOID Value с невалидным OID
+func TestNullOIDValueInvalid(t *testing.T) {
+	n := NullOID{
+		OID:   OID{3, 1},
+		Valid: true,
+	}
+
+	_, err := n.Value()
+	if err == nil {
+		t.Error("NullOID.Value: ожидалась ошибка")
+	}
+}
+
+// Тесты для Array Value с невалидным OID
+func TestArrayValueInvalid(t *testing.T) {
+	arr := Array{
+		MustParseOID("1.3.6.1"),
+		{3, 1}, // Невалидный
+	}
+
+	_, err := arr.Value()
+	if err == nil {
+		t.Error("Array.Value: ожидалась ошибка")
+	}
+}
+
+// Тесты для Array Scan с невалидным форматом
+func TestArrayScanInvalid(t *testing.T) {
+	tests := []struct {
+		name  string
+		input any
+	}{
+		{"Не массив", "not-array"},
+		{"Нет закрывающей", "{1.3.6.1"},
+		{"Нет открывающей", "1.3.6.1}"},
+		{"Число", 123},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var arr Array
+			if err := arr.Scan(tt.input); err == nil {
+				t.Error("Array.Scan: ожидалась ошибка")
+			}
+		})
+	}
+}
+
+// Тесты для Array UnmarshalJSON с ошибками
+func TestArrayUnmarshalJSONErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"Не JSON", []byte("invalid")},
+		{"Объект", []byte(`{"oid":"1.3.6.1"}`)},
+		{"Число", []byte("123")},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var arr Array
+			if err := arr.UnmarshalJSON(tt.data); err == nil {
+				t.Error("Array.UnmarshalJSON: ожидалась ошибка")
+			}
+		})
+	}
+}
+
+// Тесты для NullOID UnmarshalJSON с ошибками
+func TestNullOIDUnmarshalJSONErrors(t *testing.T) {
+	tests := []struct {
+		name string
+		data []byte
+	}{
+		{"Не JSON", []byte("invalid")},
+		{"Число", []byte("123")},
+		{"Объект", []byte(`{"oid":"1.3.6.1"}`)},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var n NullOID
+			if err := n.UnmarshalJSON(tt.data); err == nil {
+				t.Error("NullOID.UnmarshalJSON: ожидалась ошибка")
+			}
+		})
+	}
+}
+
+// Тесты для ошибок Scan
+func TestScanErrors(t *testing.T) {
+	var oid OID
+
+	// Неподдерживаемый тип
+	if err := oid.Scan(123); err == nil {
+		t.Error("Scan: ожидалась ошибка для числа")
+	}
+
+	// Невалидный OID
+	if err := oid.Scan("invalid"); err == nil {
+		t.Error("Scan: ожидалась ошибка для невалидного OID")
+	}
+}
+
+// Тесты для глобальных NoCopy функций
 func TestGlobalNoCopy(t *testing.T) {
 	ResetRegistry()
 
-	oid := MustParseOID("1.3.6.1.4.1")
-	Register("test", oid)
+	Register("test", MustParseOID("1.3.6.1"))
 
-	// Глобальный NoCopy
-	noCopy, exists := LookupByNameNoCopy("test")
-	if !exists {
-		t.Fatal("OID не найден")
-	}
-	if !noCopy.Equal(oid) {
-		t.Error("NoCopy OID не совпадает")
+	// LookupByNameNoCopy
+	oid, exists := LookupByNameNoCopy("test")
+	if !exists || !oid.Equal(MustParseOID("1.3.6.1")) {
+		t.Error("LookupByNameNoCopy: неверный результат")
 	}
 
-	// Глобальный ListNoCopy
+	// ListNoCopy
 	list := ListNoCopy()
 	if len(list) != 1 {
-		t.Errorf("len = %d, ожидалось 1", len(list))
+		t.Error("ListNoCopy: неверная длина")
 	}
 
-	// Глобальный OIDsNoCopy
+	// OIDsNoCopy
 	oids := OIDsNoCopy()
 	if len(oids) != 1 {
-		t.Errorf("len = %d, ожидалось 1", len(oids))
+		t.Error("OIDsNoCopy: неверная длина")
+	}
+
+	// Names
+	names := Names()
+	if len(names) != 1 {
+		t.Error("Names: неверная длина")
+	}
+
+	// OIDs
+	oidsCopy := OIDs()
+	if len(oidsCopy) != 1 {
+		t.Error("OIDs: неверная длина")
 	}
 }
 

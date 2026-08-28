@@ -1,22 +1,22 @@
-// oid/database.go
 package oid
 
 import (
 	"database/sql/driver"
 	"encoding/json"
+	"errors"
 	"fmt"
+	"strings"
 )
 
-// Value реализует интерфейс driver.Valuer для базового OID
-func (o OID) Value() (driver.Value, error) {
-	if len(o) == 0 {
-		return nil, nil
-	}
-	if err := o.Validate(); err != nil {
-		return nil, fmt.Errorf("невалидный OID перед сохранением в БД: %w", err)
-	}
-	return o.String(), nil
-}
+// Статические ошибки для database
+var (
+	ErrUnsupportedScanType = errors.New("неподдерживаемый тип для конвертации в OID")
+	ErrInvalidArrayFormat  = errors.New("некорректный формат массива OID")
+	ErrSaveValidation      = errors.New("невалидный OID перед сохранением в БД")
+	ErrDatabaseParse       = errors.New("ошибка парсинга OID из БД")
+	ErrInvalidArrayOID     = errors.New("невалидный OID в массиве")
+	ErrJSONDecodeArray     = errors.New("ошибка декодирования JSON массива")
+)
 
 // Scan реализует интерфейс sql.Scanner для базового OID
 func (o *OID) Scan(value any) error {
@@ -32,23 +32,64 @@ func (o *OID) Scan(value any) error {
 	case []byte:
 		s = string(v)
 	default:
-		return fmt.Errorf("неподдерживаемый тип для конвертации в OID: %T", value)
+		return fmt.Errorf("%w: %T", ErrUnsupportedScanType, value)
 	}
 
 	parsed, err := ParseOID(s)
 	if err != nil {
-		return fmt.Errorf("ошибка парсинга OID из БД: %w", err)
+		return fmt.Errorf("%w: %w", ErrDatabaseParse, err)
 	}
 
 	*o = parsed
 	return nil
 }
 
+// Value реализует интерфейс driver.Valuer для базового OID
+func (o OID) Value() (driver.Value, error) {
+	if len(o) == 0 {
+		return nil, nil
+	}
+	if err := o.Validate(); err != nil {
+		return nil, fmt.Errorf("%w: %w", ErrSaveValidation, err)
+	}
+	return o.String(), nil
+}
+
 // NullOID представляет OID, который может быть NULL в базе данных.
-// Он реализует интерфейсы sql.Scanner и driver.Valuer аналогично sql.NullString.
 type NullOID struct {
 	OID   OID
-	Valid bool // Valid равен true, если OID не NULL
+	Valid bool
+}
+
+// FromOID создает NullOID из обычного OID
+func FromOID(oid OID) NullOID {
+	if len(oid) == 0 {
+		return NullOID{Valid: false}
+	}
+	return NullOID{OID: oid, Valid: true}
+}
+
+// FromString создает NullOID из строки
+func FromString(s string) (NullOID, error) {
+	if s == "" {
+		return NullOID{Valid: false}, nil
+	}
+
+	oid, err := ParseOID(s)
+	if err != nil {
+		return NullOID{}, err
+	}
+
+	return NullOID{OID: oid, Valid: true}, nil
+}
+
+// MustFromString создает NullOID из строки и паникует при ошибке
+func MustFromString(s string) NullOID {
+	n, err := FromString(s)
+	if err != nil {
+		panic(err)
+	}
+	return n
 }
 
 // Value реализует интерфейс driver.Valuer для NullOID
@@ -71,8 +112,7 @@ func (n *NullOID) Scan(value any) error {
 	return n.OID.Scan(value)
 }
 
-// String возвращает строковое представление NullOID.
-// Для NULL возвращает пустую строку.
+// String возвращает строковое представление NullOID
 func (n NullOID) String() string {
 	if !n.Valid {
 		return ""
@@ -80,8 +120,7 @@ func (n NullOID) String() string {
 	return n.OID.String()
 }
 
-// Equal проверяет равенство двух NullOID.
-// Два NULL значения считаются равными.
+// Equal проверяет равенство двух NullOID
 func (n NullOID) Equal(other NullOID) bool {
 	if !n.Valid && !other.Valid {
 		return true
@@ -92,8 +131,7 @@ func (n NullOID) Equal(other NullOID) bool {
 	return n.OID.Equal(other.OID)
 }
 
-// MarshalJSON реализует json.Marshaler для NullOID.
-// NULL сериализуется как null, иначе как строка OID.
+// MarshalJSON реализует json.Marshaler для NullOID
 func (n NullOID) MarshalJSON() ([]byte, error) {
 	if !n.Valid {
 		return []byte("null"), nil
@@ -101,17 +139,14 @@ func (n NullOID) MarshalJSON() ([]byte, error) {
 	return n.OID.MarshalJSON()
 }
 
-// UnmarshalJSON реализует json.Unmarshaler для NullOID.
-// Принимает null или строку с OID.
+// UnmarshalJSON реализует json.Unmarshaler для NullOID
 func (n *NullOID) UnmarshalJSON(data []byte) error {
-	// Проверяем на null
 	if string(data) == "null" || string(data) == `""` {
 		n.OID = nil
 		n.Valid = false
 		return nil
 	}
 
-	// Декодируем как обычный OID
 	if err := n.OID.UnmarshalJSON(data); err != nil {
 		return err
 	}
@@ -119,61 +154,26 @@ func (n *NullOID) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// FromOID создает NullOID из обычного OID.
-func FromOID(oid OID) NullOID {
-	if len(oid) == 0 {
-		return NullOID{Valid: false}
-	}
-	return NullOID{OID: oid, Valid: true}
-}
+// Array представляет массив OID для работы с PostgreSQL массивами
+type Array []OID
 
-// FromString создает NullOID из строки.
-// Пустая строка интерпретируется как NULL.
-func FromString(s string) (NullOID, error) {
-	if s == "" {
-		return NullOID{Valid: false}, nil
-	}
-
-	oid, err := ParseOID(s)
-	if err != nil {
-		return NullOID{}, err
-	}
-
-	return NullOID{OID: oid, Valid: true}, nil
-}
-
-// MustFromString создает NullOID из строки и паникует при ошибке.
-func MustFromString(s string) NullOID {
-	n, err := FromString(s)
-	if err != nil {
-		panic(err)
-	}
-	return n
-}
-
-// OIDArray представляет массив OID для работы с PostgreSQL массивами.
-type OIDArray []OID
-
-// Value реализует driver.Valuer для OIDArray.
-// Возвращает строку в формате PostgreSQL массива: {1.3.6.1,2.100.3}
-func (oa OIDArray) Value() (driver.Value, error) {
+// Value реализует driver.Valuer для OIDArray
+func (oa Array) Value() (driver.Value, error) {
 	if len(oa) == 0 {
 		return "{}", nil
 	}
 
-	// Предварительно вычисляем размер
 	size := 2 // фигурные скобки
 	for i, oid := range oa {
 		if i > 0 {
 			size++ // запятая
 		}
 		if err := oid.Validate(); err != nil {
-			return nil, fmt.Errorf("невалидный OID в массиве на позиции %d: %w", i, err)
+			return nil, fmt.Errorf("%w: позиция %d: %w", ErrInvalidArrayOID, i, err)
 		}
 		size += len(oid.String())
 	}
 
-	// Собираем строку
 	buf := make([]byte, 0, size)
 	buf = append(buf, '{')
 	for i, oid := range oa {
@@ -187,9 +187,8 @@ func (oa OIDArray) Value() (driver.Value, error) {
 	return string(buf), nil
 }
 
-// Scan реализует sql.Scanner для OIDArray.
-// Поддерживает PostgreSQL формат массива: {1.3.6.1,2.100.3}
-func (oa *OIDArray) Scan(value any) error {
+// Scan реализует интерфейс sql.Scanner для OIDArray
+func (oa *Array) Scan(value any) error {
 	if value == nil {
 		*oa = nil
 		return nil
@@ -202,29 +201,26 @@ func (oa *OIDArray) Scan(value any) error {
 	case []byte:
 		s = string(v)
 	default:
-		return fmt.Errorf("неподдерживаемый тип для конвертации в OIDArray: %T", value)
+		return fmt.Errorf("%w (OIDArray): %T", ErrUnsupportedScanType, value)
 	}
 
-	// Проверяем формат
 	if len(s) < 2 || s[0] != '{' || s[len(s)-1] != '}' {
-		return fmt.Errorf("некорректный формат массива OID: %s", s)
+		return fmt.Errorf("%w: %s", ErrInvalidArrayFormat, s)
 	}
 
-	// Пустой массив
 	if s == "{}" {
-		*oa = OIDArray{}
+		*oa = Array{}
 		return nil
 	}
 
-	// Парсим элементы
 	content := s[1 : len(s)-1]
 	parts := splitPostgresArray(content)
 
-	result := make(OIDArray, 0, len(parts))
+	result := make(Array, 0, len(parts))
 	for _, part := range parts {
 		oid, err := ParseOID(part)
 		if err != nil {
-			return fmt.Errorf("ошибка парсинга OID '%s' в массиве: %w", part, err)
+			return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, part, err)
 		}
 		result = append(result, oid)
 	}
@@ -233,8 +229,8 @@ func (oa *OIDArray) Scan(value any) error {
 	return nil
 }
 
-// MarshalJSON реализует json.Marshaler для OIDArray.
-func (oa OIDArray) MarshalJSON() ([]byte, error) {
+// MarshalJSON реализует json.Marshaler для OIDArray
+func (oa Array) MarshalJSON() ([]byte, error) {
 	if len(oa) == 0 {
 		return []byte("[]"), nil
 	}
@@ -254,24 +250,23 @@ func (oa OIDArray) MarshalJSON() ([]byte, error) {
 	return buf, nil
 }
 
-// UnmarshalJSON реализует json.Unmarshaler для OIDArray.
-func (oa *OIDArray) UnmarshalJSON(data []byte) error {
-	// Пустой массив
+// UnmarshalJSON реализует json.Unmarshaler для OIDArray
+func (oa *Array) UnmarshalJSON(data []byte) error {
 	if string(data) == "[]" || string(data) == "null" {
-		*oa = OIDArray{}
+		*oa = Array{}
 		return nil
 	}
 
 	var strArray []string
 	if err := json.Unmarshal(data, &strArray); err != nil {
-		return fmt.Errorf("ошибка декодирования JSON массива: %w", err)
+		return fmt.Errorf("%w: %w", ErrJSONDecodeArray, err)
 	}
 
-	result := make(OIDArray, 0, len(strArray))
+	result := make(Array, 0, len(strArray))
 	for _, s := range strArray {
 		oid, err := ParseOID(s)
 		if err != nil {
-			return fmt.Errorf("ошибка парсинга OID '%s': %w", s, err)
+			return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, s, err)
 		}
 		result = append(result, oid)
 	}
@@ -280,26 +275,27 @@ func (oa *OIDArray) UnmarshalJSON(data []byte) error {
 	return nil
 }
 
-// String возвращает строковое представление OIDArray.
-func (oa OIDArray) String() string {
+// String возвращает строковое представление OIDArray
+func (oa Array) String() string {
 	if len(oa) == 0 {
 		return "[]"
 	}
 
-	result := "["
+	var builder strings.Builder
+	builder.WriteByte('[')
 	for i, oid := range oa {
 		if i > 0 {
-			result += ", "
+			builder.WriteString(", ")
 		}
-		result += oid.String()
+		builder.WriteString(oid.String())
 	}
-	result += "]"
+	builder.WriteByte(']')
 
-	return result
+	return builder.String()
 }
 
-// Equal проверяет равенство двух OIDArray.
-func (oa OIDArray) Equal(other OIDArray) bool {
+// Equal проверяет равенство двух OIDArray
+func (oa Array) Equal(other Array) bool {
 	if len(oa) != len(other) {
 		return false
 	}
@@ -311,8 +307,8 @@ func (oa OIDArray) Equal(other OIDArray) bool {
 	return true
 }
 
-// Contains проверяет наличие OID в массиве.
-func (oa OIDArray) Contains(target OID) bool {
+// Contains проверяет наличие OID в массиве
+func (oa Array) Contains(target OID) bool {
 	for _, oid := range oa {
 		if oid.Equal(target) {
 			return true
@@ -321,15 +317,14 @@ func (oa OIDArray) Contains(target OID) bool {
 	return false
 }
 
-// Append добавляет OID в массив.
-func (oa OIDArray) Append(oids ...OID) OIDArray {
-	result := make(OIDArray, len(oa), len(oa)+len(oids))
+// Append добавляет OID в массив
+func (oa Array) Append(oids ...OID) Array {
+	result := make(Array, len(oa), len(oa)+len(oids))
 	copy(result, oa)
 	return append(result, oids...)
 }
 
-// splitPostgresArray разделяет строку PostgreSQL массива на элементы.
-// Учитывает экранирование и кавычки.
+// splitPostgresArray разделяет строку PostgreSQL массива на элементы
 func splitPostgresArray(s string) []string {
 	var parts []string
 	var current []byte
@@ -357,7 +352,6 @@ func splitPostgresArray(s string) []string {
 			current = append(current, ch)
 		case ',':
 			if !inQuotes {
-				// Убираем кавычки, если есть
 				part := string(current)
 				if len(part) >= 2 && part[0] == '"' && part[len(part)-1] == '"' {
 					part = part[1 : len(part)-1]
@@ -373,7 +367,6 @@ func splitPostgresArray(s string) []string {
 	}
 
 	if len(current) > 0 {
-		// Убираем кавычки, если есть
 		part := string(current)
 		if len(part) >= 2 && part[0] == '"' && part[len(part)-1] == '"' {
 			part = part[1 : len(part)-1]

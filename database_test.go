@@ -174,42 +174,42 @@ func TestNullOID(t *testing.T) {
 	}
 }
 
-func TestOIDArray(t *testing.T) {
+func TestArray(t *testing.T) {
 	// Тест Value
-	arr := OIDArray{
+	arr := Array{
 		MustParseOID("1.3.6.1.4.1"),
 		MustParseOID("2.100.3"),
 	}
 
 	val, err := arr.Value()
 	if err != nil {
-		t.Errorf("OIDArray.Value(): ошибка: %v", err)
+		t.Errorf("Array.Value(): ошибка: %v", err)
 	}
 	if val != "{1.3.6.1.4.1,2.100.3}" {
-		t.Errorf("OIDArray.Value() = %v, ожидалось '{1.3.6.1.4.1,2.100.3}'", val)
+		t.Errorf("Array.Value() = %v, ожидалось '{1.3.6.1.4.1,2.100.3}'", val)
 	}
 
 	// Тест Scan
-	var scanned OIDArray
+	var scanned Array
 	err = scanned.Scan("{1.3.6.1.4.1,2.100.3}")
 	if err != nil {
-		t.Errorf("OIDArray.Scan(): ошибка: %v", err)
+		t.Errorf("Array.Scan(): ошибка: %v", err)
 	}
 	if len(scanned) != 2 {
-		t.Errorf("OIDArray.Scan(): длина = %d, ожидалось 2", len(scanned))
+		t.Errorf("Array.Scan(): длина = %d, ожидалось 2", len(scanned))
 	}
 	if !scanned[0].Equal(MustParseOID("1.3.6.1.4.1")) {
-		t.Errorf("OIDArray.Scan()[0] = %v, ожидалось 1.3.6.1.4.1", scanned[0])
+		t.Errorf("Array.Scan()[0] = %v, ожидалось 1.3.6.1.4.1", scanned[0])
 	}
 
 	// Тест пустого массива
-	var emptyArr OIDArray
+	var emptyArr Array
 	err = emptyArr.Scan("{}")
 	if err != nil {
-		t.Errorf("OIDArray.Scan({}): ошибка: %v", err)
+		t.Errorf("Array.Scan({}): ошибка: %v", err)
 	}
 	if len(emptyArr) != 0 {
-		t.Errorf("OIDArray.Scan({}): длина = %d, ожидалось 0", len(emptyArr))
+		t.Errorf("Array.Scan({}): длина = %d, ожидалось 0", len(emptyArr))
 	}
 }
 
@@ -365,9 +365,9 @@ func TestNullOIDExtended(t *testing.T) {
 	})
 }
 
-func TestOIDArrayExtended(t *testing.T) {
+func TestArrayExtended(t *testing.T) {
 	t.Run("JSON", func(t *testing.T) {
-		arr := OIDArray{
+		arr := Array{
 			MustParseOID("1.3.6.1"),
 			MustParseOID("2.100.3"),
 		}
@@ -381,7 +381,7 @@ func TestOIDArrayExtended(t *testing.T) {
 			t.Errorf("Marshal = %s, ожидалось %s", data, expected)
 		}
 
-		var unmarshaled OIDArray
+		var unmarshaled Array
 		err = json.Unmarshal(data, &unmarshaled)
 		if err != nil {
 			t.Fatalf("Unmarshal: ошибка: %v", err)
@@ -392,7 +392,7 @@ func TestOIDArrayExtended(t *testing.T) {
 	})
 
 	t.Run("Contains", func(t *testing.T) {
-		arr := OIDArray{
+		arr := Array{
 			MustParseOID("1.3.6.1"),
 			MustParseOID("2.100.3"),
 		}
@@ -407,7 +407,7 @@ func TestOIDArrayExtended(t *testing.T) {
 	})
 
 	t.Run("Append", func(t *testing.T) {
-		arr := OIDArray{MustParseOID("1.3.6.1")}
+		arr := Array{MustParseOID("1.3.6.1")}
 		extended := arr.Append(
 			MustParseOID("2.100.3"),
 			MustParseOID("0.39.1"),
@@ -422,7 +422,7 @@ func TestOIDArrayExtended(t *testing.T) {
 	})
 
 	t.Run("String", func(t *testing.T) {
-		arr := OIDArray{
+		arr := Array{
 			MustParseOID("1.3.6.1"),
 			MustParseOID("2.100.3"),
 		}
@@ -432,11 +432,89 @@ func TestOIDArrayExtended(t *testing.T) {
 			t.Errorf("String = %q, ожидалось %q", arr.String(), expected)
 		}
 
-		empty := OIDArray{}
+		empty := Array{}
 		if empty.String() != "[]" {
 			t.Errorf("Empty String = %q, ожидалось '[]'", empty.String())
 		}
 	})
+}
+
+func TestSQLInterface_Negative(t *testing.T) {
+	var o OID
+
+	// Закрываем ветку ErrDatabaseParse
+	if err := o.Scan("1.3.invalid.1"); err == nil {
+		t.Error("Ожидалась ошибка парсинга при передаче некорректного OID в Scan")
+	}
+
+	var oa Array
+	// Закрываем ветку пустого массива PostgreSQL
+	if err := oa.Scan("{}"); err != nil {
+		t.Fatalf("Scan(\"{}\") не должен возвращать ошибку, получили: %v", err)
+	}
+	if len(oa) != 0 {
+		t.Errorf("Ожидался пустой OIDArray, получили длину %d", len(oa))
+	}
+}
+
+func TestNullOIDEdgeCases(t *testing.T) {
+	// FromOID с пустым
+	n := FromOID(OID{})
+	if n.Valid {
+		t.Error("FromOID(empty): Valid должно быть false")
+	}
+
+	// MustFromString с валидным
+	n = MustFromString("1.3.6.1")
+	if !n.Valid {
+		t.Error("MustFromString: Valid должно быть true")
+	}
+
+	// MustFromString с пустым
+	n = MustFromString("")
+	if n.Valid {
+		t.Error("MustFromString(empty): Valid должно быть false")
+	}
+
+	// String для NULL
+	if n.String() != "" {
+		t.Error("NullOID.String(): должна быть пустой")
+	}
+}
+
+func TestArrayEdgeCases(t *testing.T) {
+	// Пустой Array
+	arr := Array{}
+
+	// Value
+	val, err := arr.Value()
+	if err != nil {
+		t.Errorf("Array.Value(): %v", err)
+	}
+	if val != "{}" {
+		t.Errorf("Array.Value() = %v, ожидалось '{}'", val)
+	}
+
+	// String
+	if arr.String() != "[]" {
+		t.Error("Array.String(): должна быть '[]'")
+	}
+
+	// Equal
+	if !arr.Equal(Array{}) {
+		t.Error("Array.Equal: пустые должны быть равны")
+	}
+
+	// Contains
+	if arr.Contains(MustParseOID("1.3.6.1")) {
+		t.Error("Array.Contains: не должен найти")
+	}
+
+	// Append
+	extended := arr.Append(MustParseOID("1.3.6.1"))
+	if len(extended) != 1 {
+		t.Error("Array.Append: неверная длина")
+	}
 }
 
 func TestSplitPostgresArray(t *testing.T) {
@@ -482,6 +560,30 @@ func TestSplitPostgresArray(t *testing.T) {
 					t.Errorf("splitPostgresArray(%q)[%d] = %q, ожидалось %q",
 						tt.input, i, result[i], tt.expected[i])
 				}
+			}
+		})
+	}
+}
+
+func TestSplitPostgresArrayEdgeCases(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"Пустая строка", "", []string{}},
+		{"Один элемент", "1.3.6.1", []string{"1.3.6.1"}},
+		{"Два элемента", "1.3.6.1,2.100.3", []string{"1.3.6.1", "2.100.3"}},
+		{"С кавычками", `"1.3.6.1","2.100.3"`, []string{"1.3.6.1", "2.100.3"}},
+		{"С пробелами", "1.3.6.1, 2.100.3", []string{"1.3.6.1", " 2.100.3"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := splitPostgresArray(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Errorf("splitPostgresArray(%q) = %v, ожидалось %v",
+					tt.input, result, tt.expected)
 			}
 		})
 	}

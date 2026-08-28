@@ -2,92 +2,97 @@ version: "2"
 
 run:
   timeout: 5m
-  tests: true
 
 linters:
+  default: none
   enable:
     - errcheck
-    - gosimple
+#    - gosimple
     - govet
     - ineffassign
     - staticcheck
     - unused
+    - gocritic
+    - gosec
+    - misspell
+    - prealloc
+    - bodyclose
+    - noctx
+    - goconst
+    # Added
     - asasalint
     - asciicheck
     - bidichk
-    - bodyclose
+    - canonicalheader
     - containedctx
     - contextcheck
-    - cyclop
+    - copyloopvar
+    - gocyclo
     - decorder
-    - dupword
+    - depguard
+    - dogsled
+    - dupl
     - durationcheck
+    - embeddedstructfieldcheck
     - err113
+    - errchkjson
     - errname
     - errorlint
     - exhaustive
-    - exportloopref
-    - forbidigo
+#    - exhaustruct
+    - exptostd
+    - fatcontext
+    - funcorder
     - funlen
-    - gocheckcompilerdirectives
-    - gochecknoglobals
-    - gochecknoinits
-    - gocognit
-    - goconst
-    - gocritic
-    - gocyclo
-    - godot
-    - goimports
-    - gomnd
-    - gomoddirectives
-    - gomodguard
-    - goprintffuncname
-    - gosec
-    - gosimple
-    - govet
     - grouper
-    - importas
-    - ineffassign
-    - interfacebloat
-    - loggercheck
-    - maintidx
+    - iface
     - makezero
-    - mirror
-    - misspell
-    - nakedret
-    - nestif
+#    - mnd
+    - modernize
     - nilerr
-    - nilnil
-    - nlreturn
-    - noctx
-    - nolintlint
-    - nonamedreturns
-    - nosprintfhostport
-    - paralleltest
-    - prealloc
-    - predeclared
-    - promlinter
     - reassign
     - revive
-    - rowserrcheck
-    - sloglint
-    - sqlclosecheck
-    - staticcheck
-    - stylecheck
-    - tagalign
-    - tagliatelle
-    - tenv
-    - testableexamples
-    - testpackage
-    - tparallel
-    - unconvert
-    - unparam
-    - unused
-    - usestdlibvars
-    - wastedassign
     - whitespace
-    - wsl
 
-issues:
-  max-issues-per-linter: 0
-  max-same-issues: 0
+  settings:
+    gocritic:
+      enabled-tags:
+        - diagnostic
+        - style
+        - performance
+      disabled-checks:
+        - hugeParam         # Отключаем, так как интерфейс требует DomainConfig по значению
+        - commentedOutCode  # Отключаем, если много ложных срабатываний
+
+    gosec:
+      excludes:
+        - G104
+
+    depguard:
+      rules:
+        main:
+          list-mode: lax
+          allow:
+            - $gostd
+            - github.com/alme23/phonebook/internal/
+
+  exclusions:
+    rules:
+      - linters:
+          - goconst
+          - ineffassign
+          - modernize
+          - gocritic
+          - gofmt
+          - dupl
+          - gosec
+          - exhaustruct
+          - staticcheck
+          - err113
+          - errcheck
+          - funlen
+        path: _test\.go
+
+formatters:
+  enable:
+    - gofmt

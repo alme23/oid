@@ -126,3 +126,35 @@ func TestGlobalMustRegister(t *testing.T) {
 
 	MustRegister("enterprise2", MustParseOID("1.3.6.1.4.1"))
 }
+
+func TestGlobalEdgeCases(t *testing.T) {
+	ResetRegistry()
+
+	// Регистрация
+	if err := Register("test", MustParseOID("1.3.6.1")); err != nil {
+		t.Errorf("Register: %v", err)
+	}
+
+	// Дубликат
+	if err := Register("test2", MustParseOID("1.3.6.1")); err == nil {
+		t.Error("Register: ожидалась ошибка дубликата")
+	}
+
+	// Snapshot
+	snapshot := Snapshot()
+	if len(snapshot) != 1 {
+		t.Error("Snapshot: неверный размер")
+	}
+
+	// Diff
+	added, removed, changed := Diff(snapshot)
+	if len(added) != 0 || len(removed) != 0 || len(changed) != 0 {
+		t.Error("Diff: должна быть пустой")
+	}
+
+	// Clear
+	Clear()
+	if Size() != 0 {
+		t.Error("Clear: размер должен быть 0")
+	}
+}

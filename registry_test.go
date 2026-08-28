@@ -468,6 +468,182 @@ func TestRegistryAllocations(t *testing.T) {
 	t.Logf("List: %.1f allocs/op", allocs)
 }
 
+func TestArrayEqualFullCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		arr1     Array
+		arr2     Array
+		expected bool
+	}{
+		{"Оба пустые", Array{}, Array{}, true},
+		{"Оба nil", nil, nil, true},
+		{"Пустой и nil", Array{}, nil, true},
+		{"Разная длина", Array{MustParseOID("1.3.6.1")}, Array{}, false},
+		{"Одинаковые", Array{MustParseOID("1.3.6.1")}, Array{MustParseOID("1.3.6.1")}, true},
+		{"Разные", Array{MustParseOID("1.3.6.1")}, Array{MustParseOID("2.100.3")}, false},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			if tt.arr1.Equal(tt.arr2) != tt.expected {
+				t.Errorf("Equal(%v, %v) = %v, ожидалось %v",
+					tt.arr1, tt.arr2, tt.arr1.Equal(tt.arr2), tt.expected)
+			}
+		})
+	}
+}
+
+func TestSplitPostgresArrayFullCoverage(t *testing.T) {
+	tests := []struct {
+		name     string
+		input    string
+		expected []string
+	}{
+		{"Пустая", "", []string{}},
+		{"Один элемент", "1.3.6.1", []string{"1.3.6.1"}},
+		{"Два элемента", "1.3.6.1,2.100.3", []string{"1.3.6.1", "2.100.3"}},
+		{"С кавычками", `"1.3.6.1","2.100.3"`, []string{"1.3.6.1", "2.100.3"}},
+		{"С экранированием", `"1.3.6.1",\"2.100.3\"`, []string{"1.3.6.1", `\"2.100.3\"`}},
+		{"С запятой в кавычках", `"1.3.6.1,extra","2.100.3"`, []string{"1.3.6.1,extra", "2.100.3"}},
+		{"С пробелами", "1.3.6.1, 2.100.3", []string{"1.3.6.1", " 2.100.3"}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			result := splitPostgresArray(tt.input)
+			if len(result) != len(tt.expected) {
+				t.Errorf("splitPostgresArray(%q) = %v, ожидалось %v",
+					tt.input, result, tt.expected)
+				return
+			}
+			for i := range result {
+				if result[i] != tt.expected[i] {
+					t.Errorf("splitPostgresArray(%q)[%d] = %q, ожидалось %q",
+						tt.input, i, result[i], tt.expected[i])
+				}
+			}
+		})
+	}
+}
+
+func TestArrayScanFullCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		input   any
+		wantErr bool
+		wantLen int
+	}{
+		{"nil", nil, false, 0},
+		{"Пустой массив", "{}", false, 0},
+		{"Один элемент", "{1.3.6.1}", false, 1},
+		{"Два элемента", "{1.3.6.1,2.100.3}", false, 2},
+		{"Байты", []byte("{1.3.6.1}"), false, 1},
+		{"Невалидный формат", "not-array", true, 0},
+		{"Нет скобки", "{1.3.6.1", true, 0},
+		{"Число", 123, true, 0},
+		{"Невалидный OID", "{invalid}", true, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var arr Array
+			err := arr.Scan(tt.input)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Array.Scan: ожидалась ошибка")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Array.Scan: %v", err)
+			}
+			if len(arr) != tt.wantLen {
+				t.Errorf("Array.Scan: len = %d, ожидалось %d", len(arr), tt.wantLen)
+			}
+		})
+	}
+}
+func TestArrayUnmarshalJSONFullCoverage(t *testing.T) {
+	tests := []struct {
+		name    string
+		data    []byte
+		wantErr bool
+		wantLen int
+	}{
+		{"null", []byte("null"), false, 0},
+		{"Пустой массив", []byte("[]"), false, 0},
+		{"Один элемент", []byte(`["1.3.6.1"]`), false, 1},
+		{"Два элемента", []byte(`["1.3.6.1","2.100.3"]`), false, 2},
+		{"Невалидный JSON", []byte("invalid"), true, 0},
+		{"Число", []byte("123"), true, 0},
+		{"Объект", []byte(`{"oid":"1.3.6.1"}`), true, 0},
+		{"Невалидный OID", []byte(`["invalid"]`), true, 0},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var arr Array
+			err := arr.UnmarshalJSON(tt.data)
+			if tt.wantErr {
+				if err == nil {
+					t.Error("Array.UnmarshalJSON: ожидалась ошибка")
+				}
+				return
+			}
+			if err != nil {
+				t.Errorf("Array.UnmarshalJSON: %v", err)
+			}
+			if len(arr) != tt.wantLen {
+				t.Errorf("Array.UnmarshalJSON: len = %d, ожидалось %d", len(arr), tt.wantLen)
+			}
+		})
+	}
+}
+
+func TestRegistryEdgeCases(t *testing.T) {
+	reg := NewRegistry()
+
+	// Регистрация невалидного OID
+	if err := reg.Register("test", OID{3, 1}); err == nil {
+		t.Error("Register: ожидалась ошибка")
+	}
+
+	// Поиск несуществующего
+	if _, exists := reg.LookupByName("nonexistent"); exists {
+		t.Error("LookupByName: не должен найти")
+	}
+
+	// Remove несуществующего
+	if reg.Remove("nonexistent") {
+		t.Error("Remove: не должен удалить")
+	}
+
+	// Размер пустого реестра
+	if reg.Size() != 0 {
+		t.Error("Size: должен быть 0")
+	}
+
+	// Contains
+	if reg.Contains("nonexistent") {
+		t.Error("Contains: не должен найти")
+	}
+
+	// BatchRegister с пустым map
+	if err := reg.BatchRegister(map[string]OID{}); err != nil {
+		t.Error("BatchRegister: пустой map не должен дать ошибку")
+	}
+
+	// Names пустого реестра
+	if len(reg.Names()) != 0 {
+		t.Error("Names: должен быть пустым")
+	}
+
+	// OIDs пустого реестра
+	if len(reg.OIDs()) != 0 {
+		t.Error("OIDs: должен быть пустым")
+	}
+}
+
 // ============================================
 // БЕНЧМАРКИ
 // ============================================
