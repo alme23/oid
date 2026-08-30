@@ -225,6 +225,41 @@ func TestUnmarshalBERContentErrors(t *testing.T) {
 	}
 }
 
+func TestSizeBERCorrect(t *testing.T) {
+	tests := []struct {
+		name string
+		oid  OID
+	}{
+		{"Короткий", MustParseOID("1.3.6.1")},
+		{"Средний", MustParseOID("1.3.6.1.4.1")},
+		{"Длинный", func() OID {
+			oid := OID{1, 3}
+			for i := 0; i < 50; i++ {
+				oid = append(oid, MaxOIDComponent)
+			}
+			return oid
+		}()},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			size, err := tt.oid.SizeBER()
+			if err != nil {
+				t.Fatalf("SizeBER: %v", err)
+			}
+
+			data, err := tt.oid.MarshalBER()
+			if err != nil {
+				t.Fatalf("MarshalBER: %v", err)
+			}
+
+			if size != len(data) {
+				t.Errorf("SizeBER = %d, MarshalBER = %d", size, len(data))
+			}
+		})
+	}
+}
+
 // Тесты для SizeBER
 // Тесты для BER edge cases
 func TestBEREdgeCases(t *testing.T) {

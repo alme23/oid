@@ -1,2 +1,6 @@
 *.txt
 cover*
+*.yml
+*.yaml
+*.bat
+*.html

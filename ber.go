@@ -1,7 +1,6 @@
 package oid
 
 import (
-	"errors"
 	"fmt"
 )
 
@@ -9,19 +8,15 @@ const (
 	berTagOID = 0x06 // Тег ASN.1 для Object Identifier
 )
 
-// Статические ошибки пакета для BER/DER кодирования
-var (
-	ErrInvalidLength        = errors.New("некорректная кодировка длины в BER")
-	ErrEmptyContent         = errors.New("пустой контент BER OID")
-	ErrFirstComponentFailed = errors.New("некорректный первый компонент BER OID")
-	ErrComponentFailed      = errors.New("некорректный компонент BER OID")
-	ErrComponentOverflow    = errors.New("переполнение компонента OID при декодировании BER")
-)
-
 // AppendBER кодирует OID в формате BER/DER без тега и длины
-func (o OID) AppendBER(dst []byte) ([]byte, error) {
+func (o OID) AppendBER(dst []byte) (result []byte, err error) {
 	if err := o.Validate(); err != nil {
 		return dst, err
+	}
+
+	// Проверка границ
+	if len(o) < 2 {
+		return dst, ErrOIDTooShort
 	}
 
 	firstCombined := uint32(o[0]*40 + o[1])
@@ -40,6 +35,10 @@ func (o OID) MarshalBER() (data []byte, err error) {
 		return nil, err
 	}
 
+	if len(o) < 2 {
+		return nil, ErrOIDTooShort
+	}
+
 	firstCombined, err := combinedFirstComponents(o[0], o[1])
 	if err != nil {
 		return nil, err
@@ -50,17 +49,16 @@ func (o OID) MarshalBER() (data []byte, err error) {
 		contentSize += base128Size(v)
 	}
 
-	headerSize := 2
-	if contentSize >= 128 {
-		headerSize = 2 + lengthSize(contentSize)
-	}
-
-	result := make([]byte, 0, headerSize+contentSize)
-	result = append(result, berTagOID)
+	// Создаем результат с правильным размером
+	var result []byte
 
 	if contentSize < 128 {
+		// Короткая форма: тег + 1 байт длины + контент
+		result = make([]byte, 0, 1+1+contentSize)
+		result = append(result, berTagOID)
 		result = append(result, byte(contentSize))
 	} else {
+		// Длинная форма
 		var lenBuf [4]byte
 		lIdx := 4
 		tempLen := contentSize
@@ -70,6 +68,10 @@ func (o OID) MarshalBER() (data []byte, err error) {
 			tempLen >>= 8
 		}
 		numLenBytes := 4 - lIdx
+
+		// Размер: тег + 1 байт длины + numLenBytes байт длины + контент
+		result = make([]byte, 0, 1+1+numLenBytes+contentSize)
+		result = append(result, berTagOID)
 		result = append(result, byte(0x80|numLenBytes))
 		result = append(result, lenBuf[lIdx:]...)
 	}
@@ -79,7 +81,6 @@ func (o OID) MarshalBER() (data []byte, err error) {
 
 // UnmarshalBER декодирует OID из полного BER/DER TLV-пакета
 func (o *OID) UnmarshalBER(data []byte) (err error) {
-	// Минимальная длина: тег (1) + длина (1) = 2 байта
 	if len(data) < 2 {
 		return ErrInsufficientData
 	}
@@ -110,17 +111,14 @@ func (o *OID) UnmarshalBER(data []byte) (err error) {
 		headerLen = 2 + numLenBytes
 	}
 
-	// Проверка пустого контента
 	if length == 0 {
 		return ErrEmptyContent
 	}
 
-	// Проверка, что данных достаточно
 	if len(data) < headerLen+length {
 		return ErrInsufficientData
 	}
 
-	// Проверка, что нет лишних данных
 	if len(data) != headerLen+length {
 		return fmt.Errorf("%w: длина данных (%d) не совпадает с ASN.1 длиной (%d)",
 			ErrInvalidLength, len(data), headerLen+length)
@@ -131,18 +129,16 @@ func (o *OID) UnmarshalBER(data []byte) (err error) {
 }
 
 // UnmarshalBERContent декодирует OID из BER/DER Content Bytes
-func (o *OID) UnmarshalBERContent(content []byte) error {
+func (o *OID) UnmarshalBERContent(content []byte) (err error) {
 	if len(content) == 0 {
 		return ErrEmptyContent
 	}
 
-	// Декодируем первый компонент (base-128)
 	firstCombined, bytesRead := readBase128FromBytes(content)
 	if bytesRead == 0 {
 		return ErrFirstComponentFailed
 	}
 
-	// Разделяем первые два компонента согласно RFC 2578
 	var first, second uint32
 	switch {
 	case firstCombined < 40:
@@ -159,7 +155,6 @@ func (o *OID) UnmarshalBERContent(content []byte) error {
 	res := make(OID, 0, bytesRead+2)
 	res = append(res, first, second)
 
-	// Декодируем остальные компоненты
 	pos := bytesRead
 	for pos < len(content) {
 		component, read := readBase128FromBytes(content[pos:])
@@ -179,12 +174,12 @@ func (o *OID) UnmarshalBERContent(content []byte) error {
 }
 
 // MarshalDER идентичен MarshalBER для OID
-func (o OID) MarshalDER() ([]byte, error) {
+func (o OID) MarshalDER() (data []byte, err error) {
 	return o.MarshalBER()
 }
 
 // UnmarshalDER идентичен UnmarshalBER для OID
-func (o *OID) UnmarshalDER(data []byte) error {
+func (o *OID) UnmarshalDER(data []byte) (err error) {
 	return o.UnmarshalBER(data)
 }
 
@@ -192,6 +187,10 @@ func (o *OID) UnmarshalDER(data []byte) error {
 func (o OID) SizeBER() (size int, err error) {
 	if err := o.Validate(); err != nil {
 		return 0, err
+	}
+
+	if len(o) < 2 {
+		return 0, ErrOIDTooShort
 	}
 
 	firstCombined, err := combinedFirstComponents(o[0], o[1])
@@ -205,32 +204,34 @@ func (o OID) SizeBER() (size int, err error) {
 	}
 
 	// Заголовок: тег (1 байт) + длина
-	// Для короткой формы: 1 байт длины
-	// Для длинной формы: 1 байт (0x80|numBytes) + numBytes байт
 	if contentSize < 128 {
-		return 2 + contentSize, nil // тег + короткая длина + контент
+		// Короткая форма: 1 байт тега + 1 байт длины
+		return 1 + 1 + contentSize, nil
 	}
 
-	// Длинная форма длины
-	lengthBytes := lengthSize(contentSize)    // количество байт для кодирования длины
-	return 1 + lengthBytes + contentSize, nil // тег + длина + контент
+	// Длинная форма: 1 байт тега + 1 байт (0x80|numBytes) + numBytes байт длины
+	lengthBytes := lengthSize(contentSize)
+	return 1 + lengthBytes + contentSize, nil
+}
+
+// safeByte конвертирует int в byte с проверкой диапазона
+func safeByte(value int) byte {
+	// Маскируем до 8 бит для гарантии безопасности
+	return byte(value & 0xFF)
 }
 
 // readBase128FromBytes читает base-128 значение из байтового среза
 func readBase128FromBytes(data []byte) (value uint32, bytesRead int) {
-	bytesRead = 0
-	value = 0
-
 	for _, b := range data {
 		if bytesRead >= 5 {
 			return 0, 0
 		}
 
-		if value > (0xffffffff >> 7) {
+		if value > (0xFFFFFFFF >> 7) {
 			return 0, 0
 		}
 
-		value = (value << 7) | uint32(b&0x7f)
+		value = (value << 7) | uint32(b&0x7F)
 		bytesRead++
 
 		if b&0x80 == 0 {
@@ -242,7 +243,7 @@ func readBase128FromBytes(data []byte) (value uint32, bytesRead int) {
 }
 
 // appendBase128Value кодирует uint32 в base-128 формат
-func appendBase128Value(dst []byte, value uint32) (result []byte) {
+func appendBase128Value(dst []byte, value uint32) []byte {
 	if value < 128 {
 		return append(dst, byte(value))
 	}
@@ -250,13 +251,11 @@ func appendBase128Value(dst []byte, value uint32) (result []byte) {
 	var buf [5]byte
 	idx := 4
 
-	// Последний байт
 	buf[idx] = byte(value & 0x7F)
 	value >>= 7
 
 	for value > 0 && idx > 0 {
 		idx--
-		// Разделяем операции для избежания предупреждения
 		low7bits := byte(value & 0x7F)
 		buf[idx] = low7bits | 0x80
 		value >>= 7

@@ -1,18 +1,9 @@
 package oid
 
 import (
-	"errors"
 	"fmt"
 	"maps"
 	"sync"
-)
-
-// Статические ошибки реестра
-var (
-	ErrOIDAlreadyRegistered = errors.New("OID уже зарегистрирован")
-	ErrNameAlreadyExists    = errors.New("имя уже зарегистрировано")
-	ErrDuplicateNameInBatch = errors.New("дублирование имени внутри пакета")
-	ErrDuplicateOIDInBatch  = errors.New("дублирование OID внутри пакета")
 )
 
 // Registry хранит именованные OID. Полностью потокобезопасен.
@@ -109,7 +100,7 @@ func (r *Registry) List() (result map[string]OID) {
 
 	result = make(map[string]OID, len(r.names))
 
-	// Поверхностное копирование
+	// Поверхностное копирование через maps.Copy
 	maps.Copy(result, r.names)
 
 	// Глубокое копирование OID
@@ -129,7 +120,7 @@ func (r *Registry) ListNoCopy() (result map[string]OID) {
 
 	result = make(map[string]OID, len(r.names))
 
-	// Поверхностное копирование
+	// Копирование через maps.Copy
 	maps.Copy(result, r.names)
 
 	return result

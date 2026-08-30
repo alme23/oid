@@ -3,19 +3,8 @@ package oid
 import (
 	"database/sql/driver"
 	"encoding/json"
-	"errors"
 	"fmt"
 	"strings"
-)
-
-// Статические ошибки для database
-var (
-	ErrUnsupportedScanType = errors.New("неподдерживаемый тип для конвертации в OID")
-	ErrInvalidArrayFormat  = errors.New("некорректный формат массива OID")
-	ErrSaveValidation      = errors.New("невалидный OID перед сохранением в БД")
-	ErrDatabaseParse       = errors.New("ошибка парсинга OID из БД")
-	ErrInvalidArrayOID     = errors.New("невалидный OID в массиве")
-	ErrJSONDecodeArray     = errors.New("ошибка декодирования JSON массива")
 )
 
 // Scan реализует интерфейс sql.Scanner для базового OID

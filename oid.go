@@ -17,20 +17,6 @@ const (
 // OID представляет Object Identifier
 type OID []uint32
 
-// combinedFirstComponents вычисляет объединенное значение первых двух компонентов
-// с проверкой на переполнение
-func combinedFirstComponents(first, second uint32) (uint32, error) {
-	// Используем uint64 для промежуточных вычислений
-	combined := uint64(first)*40 + uint64(second)
-
-	// Проверяем, что значение помещается в uint32
-	if combined > uint64(^uint32(0)) {
-		return 0, fmt.Errorf("%w: %d*40 + %d", ErrComponentTooBig, first, second)
-	}
-
-	return uint32(combined), nil
-}
-
 // ParseOID создает OID без выделения промежуточных срезов строк
 func ParseOID(s string) (oid OID, err error) {
 	if s == "" {
@@ -84,6 +70,20 @@ func MustParseOID(s string) OID {
 		panic(err)
 	}
 	return oid
+}
+
+// FromASN1 конвертирует asn1.ObjectIdentifier в OID
+func FromASN1(asn1OID asn1.ObjectIdentifier) (result OID) {
+	result = make(OID, len(asn1OID))
+	for i, v := range asn1OID {
+		// Безопасная конвертация: проверяем, что v неотрицательное
+		if v < 0 {
+			return nil
+		}
+		// #nosec G115 -- v гарантированно >= 0 из проверки выше
+		result[i] = uint32(v)
+	}
+	return result
 }
 
 // String возвращает строковое представление OID
@@ -199,19 +199,16 @@ func (o OID) ToASN1() (result asn1.ObjectIdentifier) {
 	return result
 }
 
-// FromASN1 конвертирует asn1.ObjectIdentifier в OID
-func FromASN1(asn1OID asn1.ObjectIdentifier) (result OID) {
-	result = make(OID, len(asn1OID))
-	for i, v := range asn1OID {
-		result[i] = uint32(v)
-	}
-	return result
-}
-
+// MarshalBinary реализует encoding.BinaryMarshaler
 // MarshalBinary реализует encoding.BinaryMarshaler
 func (o OID) MarshalBinary() (data []byte, err error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
+	}
+
+	// Проверка границ
+	if len(o) < 2 {
+		return nil, ErrOIDTooShort
 	}
 
 	firstCombined, err := combinedFirstComponents(o[0], o[1])
@@ -376,7 +373,7 @@ func base128Size(value uint32) (size int) {
 	}
 }
 
-// lengthSize возвращает количество байт для кодирования длины
+// lengthSize возвращает количество байт для кодирования длины (включая первый байт)
 func lengthSize(length int) (size int) {
 	switch {
 	case length < 128:
@@ -416,21 +413,39 @@ func writeBase128(dst []byte, value uint32) (bytesWritten int) {
 
 // writeLength записывает длину в ASN.1 формате
 func writeLength(dst []byte, length int) (bytesWritten int) {
+	// Проверка на отрицательное значение
+	if length < 0 {
+		return 0
+	}
+
 	if length < 128 {
+		// #nosec G115 -- length гарантированно < 128 из условия выше
 		dst[0] = byte(length)
 		return 1
 	}
 
 	if length < 256 {
 		dst[0] = 0x81
+		// #nosec G115 -- length гарантированно < 256 из условия выше
 		dst[1] = byte(length)
 		return 2
 	}
 
-	dst[0] = 0x82
-	dst[1] = byte(length >> 8)
-	dst[2] = byte(length)
-	return 3
+	if length < 65536 {
+		dst[0] = 0x82
+		// #nosec G115 -- length гарантированно < 65536 из условия выше
+		dst[1] = byte(length >> 8)
+		// #nosec G115 -- length гарантированно < 65536 из условия выше
+		dst[2] = byte(length)
+		return 3
+	}
+
+	// Для очень больших значений
+	dst[0] = 0x83
+	dst[1] = byte((length >> 16) & 0xFF)
+	dst[2] = byte((length >> 8) & 0xFF)
+	dst[3] = byte(length & 0xFF)
+	return 4
 }
 
 // readBase128 читает число из base-128 формата
@@ -452,7 +467,7 @@ func readBase128(data []byte) (value uint32, bytesRead int) {
 }
 
 // readLength читает длину ASN.1
-func readLength(data []byte) (length int, bytesRead int) {
+func readLength(data []byte) (length, bytesRead int) {
 	if len(data) == 0 {
 		return 0, 0
 	}
@@ -480,4 +495,18 @@ func readLength(data []byte) (length int, bytesRead int) {
 	}
 
 	return length, requiredLen
+}
+
+// combinedFirstComponents вычисляет объединенное значение первых двух компонентов
+// с проверкой на переполнение
+func combinedFirstComponents(first, second uint32) (uint32, error) {
+	// Используем uint64 для промежуточных вычислений
+	combined := uint64(first)*40 + uint64(second)
+
+	// Проверяем, что значение помещается в uint32
+	if combined > uint64(^uint32(0)) {
+		return 0, fmt.Errorf("%w: %d*40 + %d", ErrComponentTooBig, first, second)
+	}
+
+	return uint32(combined), nil
 }
