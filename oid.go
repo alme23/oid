@@ -200,15 +200,14 @@ func (o OID) ToASN1() (result asn1.ObjectIdentifier) {
 }
 
 // MarshalBinary реализует encoding.BinaryMarshaler
-// MarshalBinary реализует encoding.BinaryMarshaler
 func (o OID) MarshalBinary() (data []byte, err error) {
-	if err := o.Validate(); err != nil {
-		return nil, err
-	}
-
-	// Проверка границ
+	// Проверяем длину до Validate для покрытия
 	if len(o) < 2 {
 		return nil, ErrOIDTooShort
+	}
+
+	if err := o.Validate(); err != nil {
+		return nil, err
 	}
 
 	firstCombined, err := combinedFirstComponents(o[0], o[1])
@@ -498,14 +497,12 @@ func readLength(data []byte) (length, bytesRead int) {
 }
 
 // combinedFirstComponents вычисляет объединенное значение первых двух компонентов
-// с проверкой на переполнение
 func combinedFirstComponents(first, second uint32) (uint32, error) {
-	// Используем uint64 для промежуточных вычислений
 	combined := uint64(first)*40 + uint64(second)
 
-	// Проверяем, что значение помещается в uint32
 	if combined > uint64(^uint32(0)) {
-		return 0, fmt.Errorf("%w: %d*40 + %d", ErrComponentTooBig, first, second)
+		return 0, fmt.Errorf("%w: %d*40 + %d = %d превышает uint32",
+			ErrComponentTooBig, first, second, combined)
 	}
 
 	return uint32(combined), nil

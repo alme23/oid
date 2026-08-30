@@ -14,11 +14,6 @@ func (o OID) AppendBER(dst []byte) (result []byte, err error) {
 		return dst, err
 	}
 
-	// Проверка границ
-	if len(o) < 2 {
-		return dst, ErrOIDTooShort
-	}
-
 	firstCombined := uint32(o[0]*40 + o[1])
 	dst = appendBase128Value(dst, firstCombined)
 
@@ -33,10 +28,6 @@ func (o OID) AppendBER(dst []byte) (result []byte, err error) {
 func (o OID) MarshalBER() (data []byte, err error) {
 	if err := o.Validate(); err != nil {
 		return nil, err
-	}
-
-	if len(o) < 2 {
-		return nil, ErrOIDTooShort
 	}
 
 	firstCombined, err := combinedFirstComponents(o[0], o[1])
@@ -55,8 +46,7 @@ func (o OID) MarshalBER() (data []byte, err error) {
 	if contentSize < 128 {
 		// Короткая форма: тег + 1 байт длины + контент
 		result = make([]byte, 0, 1+1+contentSize)
-		result = append(result, berTagOID)
-		result = append(result, byte(contentSize))
+		result = append(result, berTagOID, byte(contentSize&0x7F))
 	} else {
 		// Длинная форма
 		var lenBuf [4]byte
@@ -71,8 +61,7 @@ func (o OID) MarshalBER() (data []byte, err error) {
 
 		// Размер: тег + 1 байт длины + numLenBytes байт длины + контент
 		result = make([]byte, 0, 1+1+numLenBytes+contentSize)
-		result = append(result, berTagOID)
-		result = append(result, byte(0x80|numLenBytes))
+		result = append(result, berTagOID, byte((0x80|numLenBytes)&0xFF))
 		result = append(result, lenBuf[lIdx:]...)
 	}
 
@@ -189,10 +178,6 @@ func (o OID) SizeBER() (size int, err error) {
 		return 0, err
 	}
 
-	if len(o) < 2 {
-		return 0, ErrOIDTooShort
-	}
-
 	firstCombined, err := combinedFirstComponents(o[0], o[1])
 	if err != nil {
 		return 0, err
@@ -212,12 +197,6 @@ func (o OID) SizeBER() (size int, err error) {
 	// Длинная форма: 1 байт тега + 1 байт (0x80|numBytes) + numBytes байт длины
 	lengthBytes := lengthSize(contentSize)
 	return 1 + lengthBytes + contentSize, nil
-}
-
-// safeByte конвертирует int в byte с проверкой диапазона
-func safeByte(value int) byte {
-	// Маскируем до 8 бит для гарантии безопасности
-	return byte(value & 0xFF)
 }
 
 // readBase128FromBytes читает base-128 значение из байтового среза

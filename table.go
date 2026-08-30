@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"maps"
 	"slices"
+	"strconv"
 	"strings"
 )
 
@@ -13,10 +14,14 @@ type TableOID struct {
 	Columns map[string]uint32 // Имя колонки -> номер
 }
 
-// NewTableOID создает таблицу
+// NewTableOID создает таблицу с копией базы
 func NewTableOID(base OID) *TableOID {
+	// Создаем копию базы для независимости
+	baseCopy := make(OID, len(base))
+	copy(baseCopy, base)
+
 	return &TableOID{
-		Base:    base,
+		Base:    baseCopy,
 		Columns: make(map[string]uint32),
 	}
 }
@@ -32,9 +37,16 @@ func (t *TableOID) AddColumn(name string, column uint32) {
 	t.Columns[name] = column
 }
 
-// AddColumns добавляет несколько колонок
+// AddColumns добавляет несколько колонок (оптимизированная версия)
 func (t *TableOID) AddColumns(columns map[string]uint32) {
-	// Используем maps.Copy вместо цикла
+	// Проверяем, нужно ли расширять map
+	if len(t.Columns) == 0 {
+		// Если текущая map пустая, просто копируем
+		t.Columns = maps.Clone(columns)
+		return
+	}
+
+	// Иначе используем maps.Copy
 	maps.Copy(t.Columns, columns)
 }
 
@@ -65,29 +77,50 @@ func (t *TableOID) GetColumnOIDWithIndexes(columnName string, indexes ...uint32)
 	return result, nil
 }
 
-// GetRowOID возвращает все OID колонок для индекса
+// GetRowOID возвращает все OID колонок для индекса (оптимизированная версия)
 func (t *TableOID) GetRowOID(index uint32) (map[string]OID, error) {
-	result := make(map[string]OID)
+	// Предварительно выделяем map
+	result := make(map[string]OID, len(t.Columns))
+
+	// Создаем шаблон OID
+	template := make(OID, 0, len(t.Base)+2)
+	template = append(template, t.Base...)
+	template = append(template, 0, index) // Временные значения
 
 	for name, column := range t.Columns {
-		oid := make(OID, 0, len(t.Base)+2)
-		oid = append(oid, t.Base...)
-		oid = append(oid, column, index)
+		// Копируем шаблон
+		oid := make(OID, len(template))
+		copy(oid, template)
+
+		// Устанавливаем правильный номер колонки
+		oid[len(t.Base)] = column
+
 		result[name] = oid
 	}
 
 	return result, nil
 }
 
-// GetRowOIDWithIndexes возвращает все OID колонок для нескольких индексов
+// GetRowOIDWithIndexes возвращает все OID колонок для нескольких индексов (оптимизированная версия)
 func (t *TableOID) GetRowOIDWithIndexes(indexes ...uint32) (map[string]OID, error) {
-	result := make(map[string]OID)
+	// Предварительно выделяем map
+	result := make(map[string]OID, len(t.Columns))
+
+	// Создаем шаблон OID
+	templateLen := len(t.Base) + 1 + len(indexes)
+	template := make(OID, 0, templateLen)
+	template = append(template, t.Base...)
+	template = append(template, 0) // Временное значение для колонки
+	template = append(template, indexes...)
 
 	for name, column := range t.Columns {
-		oid := make(OID, 0, len(t.Base)+1+len(indexes))
-		oid = append(oid, t.Base...)
-		oid = append(oid, column)
-		oid = append(oid, indexes...)
+		// Копируем шаблон
+		oid := make(OID, templateLen)
+		copy(oid, template)
+
+		// Устанавливаем правильный номер колонки
+		oid[len(t.Base)] = column
+
 		result[name] = oid
 	}
 
@@ -140,23 +173,23 @@ func (t *TableOID) GetColumnName(column uint32) (string, bool) {
 	return "", false
 }
 
-// GetColumnNames возвращает отсортированные имена колонок
+// GetColumnNames возвращает отсортированные имена колонок (оптимизированная)
 func (t *TableOID) GetColumnNames() []string {
 	names := make([]string, 0, len(t.Columns))
 	for name := range t.Columns {
 		names = append(names, name)
 	}
-	slices.Sort(names) // Используем slices.Sort вместо sort.Strings
+	slices.Sort(names)
 	return names
 }
 
-// GetColumnNumbers возвращает отсортированные номера колонок
+// GetColumnNumbers возвращает отсортированные номера колонок (оптимизированная)
 func (t *TableOID) GetColumnNumbers() []uint32 {
 	numbers := make([]uint32, 0, len(t.Columns))
 	for _, col := range t.Columns {
 		numbers = append(numbers, col)
 	}
-	slices.Sort(numbers) // Используем slices.Sort вместо sort.Slice
+	slices.Sort(numbers)
 	return numbers
 }
 
@@ -171,28 +204,46 @@ func (t *TableOID) Validate() error {
 	return nil
 }
 
-// String возвращает строковое представление
+// String возвращает строковое представление (оптимизированная версия)
 func (t *TableOID) String() string {
+	// Предварительно вычисляем размер для минимизации аллокаций
+	baseStr := t.Base.String()
+
+	// Вычисляем размер
+	size := len(baseStr) + 2 // " ["
+	names := t.GetColumnNames()
+	for i, name := range names {
+		if i > 0 {
+			size += 2 // ", "
+		}
+		size += len(name) + 1 + digitCount(t.Columns[name]) // "name=num"
+	}
+	size++ // "]"
+
 	var builder strings.Builder
-	builder.WriteString(t.Base.String())
+	builder.Grow(size) // Предварительное выделение памяти
+
+	builder.WriteString(baseStr)
 	builder.WriteString(" [")
 
-	names := t.GetColumnNames()
 	for i, name := range names {
 		if i > 0 {
 			builder.WriteString(", ")
 		}
-		// Используем fmt.Fprintf вместо WriteString(fmt.Sprintf(...))
-		fmt.Fprintf(&builder, "%s=%d", name, t.Columns[name])
+		builder.WriteString(name)
+		builder.WriteByte('=')
+		builder.WriteString(strconv.FormatUint(uint64(t.Columns[name]), 10))
 	}
-	builder.WriteString("]")
+	builder.WriteByte(']')
 
 	return builder.String()
 }
 
-// WalkRoot возвращает OID для начала walk
+// WalkRoot возвращает копию OID для начала walk
 func (t *TableOID) WalkRoot() OID {
-	return t.Base
+	result := make(OID, len(t.Base))
+	copy(result, t.Base)
+	return result
 }
 
 // IsColumnOID проверяет, является ли OID колонкой этой таблицы

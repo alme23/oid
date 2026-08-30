@@ -220,17 +220,15 @@ func (r *Registry) BatchRegister(entries map[string]OID) (err error) {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	seenNames := make(map[string]struct{}, len(prepared))
 	seenKeys := make(map[string]struct{}, len(prepared))
 
 	for _, entry := range prepared {
-		if _, duplicate := seenNames[entry.name]; duplicate {
-			return fmt.Errorf("%w: '%s'", ErrDuplicateNameInBatch, entry.name)
-		}
+		// Проверяем дубликаты OID внутри пакета
 		if _, duplicate := seenKeys[entry.key]; duplicate {
 			return fmt.Errorf("%w: '%s'", ErrDuplicateOIDInBatch, entry.oidCopy)
 		}
 
+		// Проверяем конфликты с существующими
 		if _, exists := r.names[entry.name]; exists {
 			return fmt.Errorf("%w: '%s'", ErrNameAlreadyExists, entry.name)
 		}
@@ -238,7 +236,6 @@ func (r *Registry) BatchRegister(entries map[string]OID) (err error) {
 			return fmt.Errorf("%w: %s как '%s'", ErrOIDAlreadyRegistered, entry.oidCopy, existingName)
 		}
 
-		seenNames[entry.name] = struct{}{}
 		seenKeys[entry.key] = struct{}{}
 	}
 

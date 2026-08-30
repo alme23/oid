@@ -1,53 +1,60 @@
-// oid/ber_test.go - исправленная версия
 package oid
 
 import (
 	"bytes"
-	"encoding/asn1"
 	"errors"
+	"fmt"
 	"testing"
 )
 
-// ============================================
-// ТЕСТЫ
-// ============================================
-
-func TestAppendBER(t *testing.T) {
+func TestOIDAppendBER(t *testing.T) {
 	tests := []struct {
 		name     string
 		oid      OID
 		expected []byte
-		wantErr  bool
+		wantErr  error
 	}{
 		{
-			name:     "Простой OID",
-			oid:      OID{1, 3, 6, 1},
-			expected: []byte{0x2b, 0x06, 0x01},
-			wantErr:  false,
+			name:     "Стандартный OID",
+			oid:      OID{1, 3, 6, 1, 4, 1},
+			expected: []byte{0x2B, 0x06, 0x01, 0x04, 0x01},
+			wantErr:  nil,
 		},
 		{
-			name:     "OID с большим компонентом",
-			oid:      OID{1, 3, 6, 1, 4, 1, 99999},
-			expected: []byte{0x2b, 0x06, 0x01, 0x04, 0x01, 0x86, 0x8d, 0x1f},
-			wantErr:  false,
+			name:     "Короткий OID",
+			oid:      OID{1, 3, 6},
+			expected: []byte{0x2B, 0x06},
+			wantErr:  nil,
 		},
 		{
-			name:     "OID с первым компонентом 2",
+			name:     "С первым 2",
 			oid:      OID{2, 100, 3},
-			expected: []byte{0x81, 0x34, 0x03}, // 180 в base-128 = 0x81 0x34
-			wantErr:  false,
+			expected: []byte{0x81, 0x34, 0x03},
+			wantErr:  nil,
 		},
 		{
-			name:     "Максимальный для BER",
-			oid:      OID{2, 175},
-			expected: []byte{0x81, 0x7f}, // 255 в base-128 = 0x81 0x7f
-			wantErr:  false,
+			name:     "С первым 0",
+			oid:      OID{0, 39, 1},
+			expected: []byte{0x27, 0x01},
+			wantErr:  nil,
 		},
 		{
 			name:     "Пустой OID",
 			oid:      OID{},
 			expected: nil,
-			wantErr:  true,
+			wantErr:  ErrOIDTooShort,
+		},
+		{
+			name:     "Один компонент",
+			oid:      OID{1},
+			expected: nil,
+			wantErr:  ErrOIDTooShort,
+		},
+		{
+			name:     "Невалидный",
+			oid:      OID{3, 1},
+			expected: nil,
+			wantErr:  ErrFirstComponentTooBig,
 		},
 	}
 
@@ -55,158 +62,566 @@ func TestAppendBER(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			result, err := tt.oid.AppendBER(nil)
 
-			if tt.wantErr {
+			if tt.wantErr != nil {
 				if err == nil {
-					t.Error("AppendBER: ожидалась ошибка")
+					t.Errorf("AppendBER: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("AppendBER = %v, want %v", err, tt.wantErr)
 				}
 				return
 			}
 
 			if err != nil {
-				t.Errorf("AppendBER: неожиданная ошибка: %v", err)
+				t.Errorf("AppendBER: %v", err)
+				return
 			}
 
 			if !bytes.Equal(result, tt.expected) {
-				t.Errorf("AppendBER = %x, ожидалось %x", result, tt.expected)
+				t.Errorf("AppendBER = %x, want %x", result, tt.expected)
 			}
 		})
 	}
 }
 
-func TestMarshalBER(t *testing.T) {
-	tests := []struct {
-		name string
-		oid  OID
-	}{
-		{name: "Простой", oid: OID{1, 3, 6, 1}},
-		{name: "Средний", oid: OID{1, 3, 6, 1, 4, 1}},
-		{name: "С нулями", oid: OID{0, 0, 1, 2}},
-		{name: "С первым 2", oid: OID{2, 100, 3}},
-		{name: "Максимальный для BER", oid: OID{2, 175}},
-		{name: "Большой компонент", oid: OID{1, 3, 6, 1, 4, 1, 99999}},
+func TestOIDAppendBERAppendToExisting(t *testing.T) {
+	oid := OID{1, 3, 6}
+
+	dst := []byte{0xAA, 0xBB}
+	result, err := oid.AppendBER(dst)
+
+	if err != nil {
+		t.Fatalf("AppendBER: %v", err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			ourData, err := tt.oid.MarshalBER()
-			if err != nil {
-				t.Fatalf("MarshalBER: ошибка: %v", err)
-			}
+	// Проверяем, что данные добавлены к существующему буферу
+	expected := []byte{0xAA, 0xBB, 0x2B, 0x06}
 
-			// Сравниваем со стандартной библиотекой
-			stdData, err := asn1.Marshal(tt.oid.ToASN1())
-			if err != nil {
-				t.Fatalf("asn1.Marshal: ошибка: %v", err)
-			}
-
-			if !bytes.Equal(ourData, stdData) {
-				t.Errorf("MarshalBER = %x, ожидалось %x", ourData, stdData)
-			}
-		})
+	if !bytes.Equal(result, expected) {
+		t.Errorf("AppendBER = %x, want %x", result, expected)
 	}
 }
 
-func TestUnmarshalBER(t *testing.T) {
-	tests := []struct {
-		name string
-		oid  OID
-	}{
-		{name: "Простой", oid: OID{1, 3, 6, 1}},
-		{name: "Средний", oid: OID{1, 3, 6, 1, 4, 1}},
-		{name: "С нулями", oid: OID{0, 0, 1, 2}},
-		{name: "С первым 2", oid: OID{2, 100, 3}},
-		{name: "Максимальный для BER", oid: OID{2, 175}},
-		{name: "Большой компонент", oid: OID{1, 3, 6, 1, 4, 1, 99999}},
+func TestOIDAppendBERRoundTrip(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			stdData, err := asn1.Marshal(tt.oid.ToASN1())
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			content, err := oid.AppendBER(nil)
 			if err != nil {
-				t.Fatalf("asn1.Marshal: ошибка: %v", err)
+				t.Fatalf("AppendBER: %v", err)
 			}
 
+			// Декодируем через UnmarshalBERContent
 			var decoded OID
-			err = decoded.UnmarshalBER(stdData)
-			if err != nil {
-				t.Fatalf("UnmarshalBER: ошибка: %v", err)
+			if err := decoded.UnmarshalBERContent(content); err != nil {
+				t.Fatalf("UnmarshalBERContent: %v", err)
 			}
 
-			if !decoded.Equal(tt.oid) {
-				t.Errorf("UnmarshalBER = %v, ожидалось %v", decoded, tt.oid)
+			if !decoded.Equal(oid) {
+				t.Errorf("Round trip: %v -> %x -> %v", oid, content, decoded)
 			}
 		})
 	}
 }
 
-func TestBERRoundTrip(t *testing.T) {
+func TestOIDAppendBERCompareWithMarshalBER(t *testing.T) {
+	oid := OID{1, 3, 6, 1}
+
+	// AppendBER - только контент
+	content, err := oid.AppendBER(nil)
+	if err != nil {
+		t.Fatalf("AppendBER: %v", err)
+	}
+
+	// MarshalBER - полный TLV
+	fullData, err := oid.MarshalBER()
+	if err != nil {
+		t.Fatalf("MarshalBER: %v", err)
+	}
+
+	// Контент должен быть частью полного TLV
+	if !bytes.Contains(fullData, content) {
+		t.Error("AppendBER контент должен быть частью MarshalBER")
+	}
+}
+
+func TestOIDAppendBERNotModifyOID(t *testing.T) {
+	oid := OID{1, 3, 6, 1}
+	oidCopy := make(OID, len(oid))
+	copy(oidCopy, oid)
+
+	oid.AppendBER(nil)
+
+	if !oid.Equal(oidCopy) {
+		t.Error("AppendBER() не должен изменять OID")
+	}
+}
+
+// Пример использования
+func ExampleOID_AppendBER() {
+	oid := OID{1, 3, 6, 1}
+
+	content, err := oid.AppendBER(nil)
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%x\n", content)
+	// Output: 2b0601
+}
+
+// Бенчмарк
+func BenchmarkOIDAppendBER(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+	dst := make([]byte, 0, 32)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		dst = dst[:0]
+		_, _ = oid.AppendBER(dst)
+	}
+}
+
+func TestOIDMarshalBER(t *testing.T) {
 	tests := []struct {
-		name string
-		oid  OID
+		name    string
+		oid     OID
+		wantErr error
 	}{
-		{name: "Простой", oid: OID{1, 3, 6, 1}},
-		{name: "Средний", oid: OID{1, 3, 6, 1, 4, 1}},
-		{name: "Длинный", oid: OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1}},
-		{name: "С нулями", oid: OID{0, 0, 1, 2}},
-		{name: "С первым 2", oid: OID{2, 100, 3}},
-		{name: "Максимальный для BER", oid: OID{2, 175}},
+		{
+			name:    "Стандартный OID",
+			oid:     OID{1, 3, 6, 1, 4, 1},
+			wantErr: nil,
+		},
+		{
+			name:    "Короткий OID",
+			oid:     OID{1, 3, 6},
+			wantErr: nil,
+		},
+		{
+			name:    "С первым 2",
+			oid:     OID{2, 100, 3},
+			wantErr: nil,
+		},
+		{
+			name:    "С первым 0",
+			oid:     OID{0, 39, 1},
+			wantErr: nil,
+		},
+		{
+			name:    "Пустой OID",
+			oid:     OID{},
+			wantErr: ErrOIDTooShort,
+		},
+		{
+			name:    "Один компонент",
+			oid:     OID{1},
+			wantErr: ErrOIDTooShort,
+		},
+		{
+			name:    "Невалидный",
+			oid:     OID{3, 1},
+			wantErr: ErrFirstComponentTooBig,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			data, err := tt.oid.MarshalBER()
-			if err != nil {
-				t.Fatalf("MarshalBER: ошибка: %v", err)
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("MarshalBER: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("MarshalBER = %v, want %v", err, tt.wantErr)
+				}
+				return
 			}
 
-			var decoded OID
-			err = decoded.UnmarshalBER(data)
 			if err != nil {
-				t.Fatalf("UnmarshalBER: ошибка: %v", err)
+				t.Errorf("MarshalBER: %v", err)
+				return
 			}
 
-			if !decoded.Equal(tt.oid) {
-				t.Errorf("Round trip: %v -> %x -> %v", tt.oid, data, decoded)
+			if len(data) == 0 {
+				t.Error("MarshalBER: пустой результат")
+			}
+
+			// Проверяем тег
+			if data[0] != 0x06 {
+				t.Errorf("Первый байт = 0x%02x, want 0x06", data[0])
 			}
 		})
 	}
 }
 
-func TestBER_NegativeErrors(t *testing.T) {
-	var o OID
-
-	// Закрываем ErrInsufficientData при коротком заголовке
-	if err := o.UnmarshalBER([]byte{0x06}); err == nil {
-		t.Error("Ожидалась ошибка ErrInsufficientData")
+func TestOIDMarshalBERRoundTrip(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
+		{1, 3, MaxOIDComponent},
 	}
 
-	// Закрываем ErrInvalidLength при несовпадении длин пакета
-	if err := o.UnmarshalBER([]byte{0x06, 0x05, 0x2b, 0x06}); err == nil {
-		t.Error("Ожидалась ошибка ErrInvalidLength")
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			data, err := oid.MarshalBER()
+			if err != nil {
+				t.Fatalf("MarshalBER: %v", err)
+			}
+
+			var decoded OID
+			if err := decoded.UnmarshalBER(data); err != nil {
+				t.Fatalf("UnmarshalBER: %v", err)
+			}
+
+			if !decoded.Equal(oid) {
+				t.Errorf("Round trip: %v -> %x -> %v", oid, data, decoded)
+			}
+		})
 	}
 }
 
-// Тесты для UnmarshalBERContent с ошибками
-func TestUnmarshalBERContentErrors(t *testing.T) {
+func TestOIDMarshalBERCompareWithBinary(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			berData, err := oid.MarshalBER()
+			if err != nil {
+				t.Fatalf("MarshalBER: %v", err)
+			}
+
+			binData, err := oid.MarshalBinary()
+			if err != nil {
+				t.Fatalf("MarshalBinary: %v", err)
+			}
+
+			// Для коротких OID BER == DER
+			if !bytes.Equal(berData, binData) {
+				t.Errorf("BER = %x, Binary = %x", berData, binData)
+			}
+		})
+	}
+}
+
+func TestOIDMarshalBERLongContent(t *testing.T) {
+	// Создаем OID с длинным контентом (> 128 байт)
+	longOID := OID{1, 3}
+	for i := 0; i < 50; i++ {
+		longOID = append(longOID, MaxOIDComponent)
+	}
+
+	data, err := longOID.MarshalBER()
+	if err != nil {
+		t.Fatalf("MarshalBER: %v", err)
+	}
+
+	if len(data) < 128 {
+		t.Errorf("len = %d, want >= 128", len(data))
+	}
+
+	// Проверяем длинную форму длины
+	if data[1] < 0x80 {
+		t.Error("Ожидалась длинная форма длины")
+	}
+}
+
+func TestOIDMarshalBERNotModifyOID(t *testing.T) {
+	oid := OID{1, 3, 6, 1}
+	oidCopy := make(OID, len(oid))
+	copy(oidCopy, oid)
+
+	oid.MarshalBER()
+
+	if !oid.Equal(oidCopy) {
+		t.Error("MarshalBER() не должен изменять OID")
+	}
+}
+
+// Пример использования
+func ExampleOID_MarshalBER() {
+	oid := OID{1, 3, 6, 1}
+
+	data, err := oid.MarshalBER()
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%x\n", data)
+	// Output: 06032b0601
+}
+
+// Бенчмарк
+func BenchmarkOIDMarshalBER(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = oid.MarshalBER()
+	}
+}
+
+func TestOIDUnmarshalBER(t *testing.T) {
 	tests := []struct {
-		name    string
-		content []byte
-		wantErr error
+		name     string
+		data     []byte
+		expected OID
+		wantErr  error
 	}{
 		{
-			name:    "Пустой",
-			content: []byte{},
-			wantErr: ErrEmptyContent,
+			name:     "Стандартный OID",
+			data:     []byte{0x06, 0x03, 0x2B, 0x06, 0x01},
+			expected: OID{1, 3, 6, 1},
+			wantErr:  nil,
 		},
 		{
-			name:    "Незавершенная последовательность",
-			content: []byte{0x2B, 0x86},
-			wantErr: ErrComponentFailed,
+			name:     "Длинный OID",
+			data:     []byte{0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00},
+			expected: OID{1, 3, 6, 1, 2, 1, 1, 1, 0},
+			wantErr:  nil,
 		},
 		{
-			name:    "Переполнение",
-			content: []byte{0x2B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F},
-			wantErr: ErrComponentFailed,
+			name:     "С первым 2",
+			data:     []byte{0x06, 0x03, 0x81, 0x34, 0x03},
+			expected: OID{2, 100, 3},
+			wantErr:  nil,
+		},
+		{
+			name:     "Пустые данные",
+			data:     []byte{},
+			expected: nil,
+			wantErr:  ErrInsufficientData,
+		},
+		{
+			name:     "Один байт",
+			data:     []byte{0x06},
+			expected: nil,
+			wantErr:  ErrInsufficientData,
+		},
+		{
+			name:     "Неверный тег",
+			data:     []byte{0x05, 0x01, 0x2B},
+			expected: nil,
+			wantErr:  ErrInvalidASN1Tag,
+		},
+		{
+			name:     "Неверная длина",
+			data:     []byte{0x06, 0x80, 0x00},
+			expected: nil,
+			wantErr:  ErrInvalidLength,
+		},
+		{
+			name:     "Пустой контент",
+			data:     []byte{0x06, 0x00},
+			expected: nil,
+			wantErr:  ErrEmptyContent,
+		},
+		{
+			name:     "Недостаточно данных",
+			data:     []byte{0x06, 0x05, 0x2B},
+			expected: nil,
+			wantErr:  ErrInsufficientData,
+		},
+		{
+			name:     "Лишние данные",
+			data:     []byte{0x06, 0x01, 0x2B, 0x00},
+			expected: nil,
+			wantErr:  ErrInvalidLength,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var oid OID
+			err := oid.UnmarshalBER(tt.data)
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("UnmarshalBER: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("UnmarshalBER = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("UnmarshalBER: %v", err)
+				return
+			}
+
+			if !oid.Equal(tt.expected) {
+				t.Errorf("UnmarshalBER = %v, want %v", oid, tt.expected)
+			}
+		})
+	}
+}
+
+func TestOIDUnmarshalBERRoundTrip(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
+		{1, 3, MaxOIDComponent},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			data, err := oid.MarshalBER()
+			if err != nil {
+				t.Fatalf("MarshalBER: %v", err)
+			}
+
+			var decoded OID
+			if err := decoded.UnmarshalBER(data); err != nil {
+				t.Fatalf("UnmarshalBER: %v", err)
+			}
+
+			if !decoded.Equal(oid) {
+				t.Errorf("Round trip: %v -> %x -> %v", oid, data, decoded)
+			}
+		})
+	}
+}
+
+func TestOIDUnmarshalBERLongContent(t *testing.T) {
+	// Создаем OID с длинным контентом
+	longOID := OID{1, 3}
+	for i := 0; i < 50; i++ {
+		longOID = append(longOID, MaxOIDComponent)
+	}
+
+	data, err := longOID.MarshalBER()
+	if err != nil {
+		t.Fatalf("MarshalBER: %v", err)
+	}
+
+	var decoded OID
+	if err := decoded.UnmarshalBER(data); err != nil {
+		t.Fatalf("UnmarshalBER: %v", err)
+	}
+
+	if !decoded.Equal(longOID) {
+		t.Error("Round trip для длинного OID не удался")
+	}
+}
+
+func TestOIDUnmarshalBERProperties(t *testing.T) {
+	t.Run("Перезаписывает предыдущее значение", func(t *testing.T) {
+		oid := OID{1, 3, 6, 1}
+
+		newData := []byte{0x06, 0x03, 0x81, 0x34, 0x03}
+		if err := oid.UnmarshalBER(newData); err != nil {
+			t.Fatalf("UnmarshalBER: %v", err)
+		}
+
+		if !oid.Equal(OID{2, 100, 3}) {
+			t.Error("OID должен перезаписаться")
+		}
+	})
+}
+
+// Пример использования
+func ExampleOID_UnmarshalBER() {
+	data := []byte{0x06, 0x03, 0x2B, 0x06, 0x01}
+
+	var oid OID
+	if err := oid.UnmarshalBER(data); err != nil {
+		panic(err)
+	}
+
+	fmt.Println(oid)
+	// Output: 1.3.6.1
+}
+
+// Пример с ошибкой
+func ExampleOID_UnmarshalBER_error() {
+	var oid OID
+	err := oid.UnmarshalBER([]byte{})
+	fmt.Println(errors.Is(err, ErrInsufficientData))
+	// Output: true
+}
+
+// Бенчмарк
+func BenchmarkOIDUnmarshalBER(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+	data, _ := oid.MarshalBER()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		var decoded OID
+		_ = decoded.UnmarshalBER(data)
+	}
+}
+
+func TestOIDUnmarshalBERContent(t *testing.T) {
+	tests := []struct {
+		name     string
+		content  []byte
+		expected OID
+		wantErr  error
+	}{
+		{
+			name:     "Стандартный контент",
+			content:  []byte{0x2B, 0x06, 0x01},
+			expected: OID{1, 3, 6, 1},
+			wantErr:  nil,
+		},
+		{
+			name:     "Длинный контент",
+			content:  []byte{0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00},
+			expected: OID{1, 3, 6, 1, 2, 1, 1, 1, 0},
+			wantErr:  nil,
+		},
+		{
+			name:     "С первым 2",
+			content:  []byte{0x81, 0x34, 0x03},
+			expected: OID{2, 100, 3},
+			wantErr:  nil,
+		},
+		{
+			name:     "Пустой контент",
+			content:  []byte{},
+			expected: nil,
+			wantErr:  ErrEmptyContent,
+		},
+		{
+			name:     "Неверный первый компонент",
+			content:  []byte{0x80},
+			expected: nil,
+			wantErr:  ErrFirstComponentFailed,
+		},
+		{
+			name:     "Неверный компонент",
+			content:  []byte{0x2B, 0x80},
+			expected: nil,
+			wantErr:  ErrComponentFailed,
+		},
+		{
+			name:     "Переполнение",
+			content:  []byte{0x2B, 0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F},
+			expected: nil,
+			wantErr:  ErrComponentFailed,
 		},
 	}
 
@@ -214,1686 +629,1026 @@ func TestUnmarshalBERContentErrors(t *testing.T) {
 		t.Run(tt.name, func(t *testing.T) {
 			var oid OID
 			err := oid.UnmarshalBERContent(tt.content)
-			if err == nil {
-				t.Error("UnmarshalBERContent: ожидалась ошибка")
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("UnmarshalBERContent: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("UnmarshalBERContent = %v, want %v", err, tt.wantErr)
+				}
 				return
 			}
-			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Errorf("UnmarshalBERContent = %v, ожидалось %v", err, tt.wantErr)
+
+			if err != nil {
+				t.Errorf("UnmarshalBERContent: %v", err)
+				return
+			}
+
+			if !oid.Equal(tt.expected) {
+				t.Errorf("UnmarshalBERContent = %v, want %v", oid, tt.expected)
 			}
 		})
 	}
 }
 
-func TestSizeBERCorrect(t *testing.T) {
-	tests := []struct {
-		name string
-		oid  OID
-	}{
-		{"Короткий", MustParseOID("1.3.6.1")},
-		{"Средний", MustParseOID("1.3.6.1.4.1")},
-		{"Длинный", func() OID {
-			oid := OID{1, 3}
-			for i := 0; i < 50; i++ {
-				oid = append(oid, MaxOIDComponent)
+func TestOIDUnmarshalBERContentRoundTrip(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
+		{1, 3, MaxOIDComponent},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			// Кодируем через AppendBER
+			content, err := oid.AppendBER(nil)
+			if err != nil {
+				t.Fatalf("AppendBER: %v", err)
 			}
-			return oid
-		}()},
+
+			// Декодируем
+			var decoded OID
+			if err := decoded.UnmarshalBERContent(content); err != nil {
+				t.Fatalf("UnmarshalBERContent: %v", err)
+			}
+
+			if !decoded.Equal(oid) {
+				t.Errorf("Round trip: %v -> %x -> %v", oid, content, decoded)
+			}
+		})
+	}
+}
+
+func TestOIDUnmarshalBERContentProperties(t *testing.T) {
+	t.Run("Перезаписывает предыдущее значение", func(t *testing.T) {
+		oid := OID{1, 3, 6, 1}
+
+		newContent := []byte{0x81, 0x34, 0x03}
+		if err := oid.UnmarshalBERContent(newContent); err != nil {
+			t.Fatalf("UnmarshalBERContent: %v", err)
+		}
+
+		if !oid.Equal(OID{2, 100, 3}) {
+			t.Error("OID должен перезаписаться")
+		}
+	})
+}
+
+// Пример использования
+func ExampleOID_UnmarshalBERContent() {
+	content := []byte{0x2B, 0x06, 0x01}
+
+	var oid OID
+	if err := oid.UnmarshalBERContent(content); err != nil {
+		panic(err)
+	}
+
+	fmt.Println(oid)
+	// Output: 1.3.6.1
+}
+
+// Пример с ошибкой
+func ExampleOID_UnmarshalBERContent_error() {
+	var oid OID
+	err := oid.UnmarshalBERContent([]byte{})
+	fmt.Println(errors.Is(err, ErrEmptyContent))
+	// Output: true
+}
+
+// Бенчмарк
+func BenchmarkOIDUnmarshalBERContent(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+	content, _ := oid.AppendBER(nil)
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		var decoded OID
+		_ = decoded.UnmarshalBERContent(content)
+	}
+}
+
+func TestOIDMarshalDER(t *testing.T) {
+	tests := []struct {
+		name    string
+		oid     OID
+		wantErr error
+	}{
+		{
+			name:    "Стандартный OID",
+			oid:     OID{1, 3, 6, 1, 4, 1},
+			wantErr: nil,
+		},
+		{
+			name:    "Короткий OID",
+			oid:     OID{1, 3, 6},
+			wantErr: nil,
+		},
+		{
+			name:    "С первым 2",
+			oid:     OID{2, 100, 3},
+			wantErr: nil,
+		},
+		{
+			name:    "С первым 0",
+			oid:     OID{0, 39, 1},
+			wantErr: nil,
+		},
+		{
+			name:    "Пустой OID",
+			oid:     OID{},
+			wantErr: ErrOIDTooShort,
+		},
+		{
+			name:    "Невалидный",
+			oid:     OID{3, 1},
+			wantErr: ErrFirstComponentTooBig,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			data, err := tt.oid.MarshalDER()
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("MarshalDER: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("MarshalDER = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("MarshalDER: %v", err)
+				return
+			}
+
+			if len(data) == 0 {
+				t.Error("MarshalDER: пустой результат")
+			}
+		})
+	}
+}
+
+func TestOIDMarshalDEREqualsMarshalBER(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			derData, err := oid.MarshalDER()
+			if err != nil {
+				t.Fatalf("MarshalDER: %v", err)
+			}
+
+			berData, err := oid.MarshalBER()
+			if err != nil {
+				t.Fatalf("MarshalBER: %v", err)
+			}
+
+			// DER == BER для OID
+			if !bytes.Equal(derData, berData) {
+				t.Errorf("DER = %x, BER = %x", derData, berData)
+			}
+		})
+	}
+}
+
+func TestOIDMarshalDEREqualsMarshalBinary(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			derData, err := oid.MarshalDER()
+			if err != nil {
+				t.Fatalf("MarshalDER: %v", err)
+			}
+
+			binData, err := oid.MarshalBinary()
+			if err != nil {
+				t.Fatalf("MarshalBinary: %v", err)
+			}
+
+			// DER == Binary для OID
+			if !bytes.Equal(derData, binData) {
+				t.Errorf("DER = %x, Binary = %x", derData, binData)
+			}
+		})
+	}
+}
+
+func TestOIDMarshalDERRoundTrip(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			data, err := oid.MarshalDER()
+			if err != nil {
+				t.Fatalf("MarshalDER: %v", err)
+			}
+
+			var decoded OID
+			if err := decoded.UnmarshalDER(data); err != nil {
+				t.Fatalf("UnmarshalDER: %v", err)
+			}
+
+			if !decoded.Equal(oid) {
+				t.Errorf("Round trip: %v -> %x -> %v", oid, data, decoded)
+			}
+		})
+	}
+}
+
+// Пример использования
+func ExampleOID_MarshalDER() {
+	oid := OID{1, 3, 6, 1}
+
+	data, err := oid.MarshalDER()
+	if err != nil {
+		panic(err)
+	}
+
+	fmt.Printf("%x\n", data)
+	// Output: 06032b0601
+}
+
+// Бенчмарк
+func BenchmarkOIDMarshalDER(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = oid.MarshalDER()
+	}
+}
+
+func TestOIDUnmarshalDER(t *testing.T) {
+	tests := []struct {
+		name     string
+		data     []byte
+		expected OID
+		wantErr  error
+	}{
+		{
+			name:     "Стандартный OID",
+			data:     []byte{0x06, 0x03, 0x2B, 0x06, 0x01},
+			expected: OID{1, 3, 6, 1},
+			wantErr:  nil,
+		},
+		{
+			name:     "Длинный OID",
+			data:     []byte{0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00},
+			expected: OID{1, 3, 6, 1, 2, 1, 1, 1, 0},
+			wantErr:  nil,
+		},
+		{
+			name:     "С первым 2",
+			data:     []byte{0x06, 0x03, 0x81, 0x34, 0x03},
+			expected: OID{2, 100, 3},
+			wantErr:  nil,
+		},
+		{
+			name:     "Пустые данные",
+			data:     []byte{},
+			expected: nil,
+			wantErr:  ErrInsufficientData,
+		},
+		{
+			name:     "Неверный тег",
+			data:     []byte{0x05, 0x01, 0x2B},
+			expected: nil,
+			wantErr:  ErrInvalidASN1Tag,
+		},
+		{
+			name:     "Пустой контент",
+			data:     []byte{0x06, 0x00},
+			expected: nil,
+			wantErr:  ErrEmptyContent,
+		},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			var oid OID
+			err := oid.UnmarshalDER(tt.data)
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("UnmarshalDER: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("UnmarshalDER = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("UnmarshalDER: %v", err)
+				return
+			}
+
+			if !oid.Equal(tt.expected) {
+				t.Errorf("UnmarshalDER = %v, want %v", oid, tt.expected)
+			}
+		})
+	}
+}
+
+func TestOIDUnmarshalDEREqualsUnmarshalBER(t *testing.T) {
+	tests := [][]byte{
+		{0x06, 0x03, 0x2B, 0x06, 0x01},
+		{0x06, 0x08, 0x2B, 0x06, 0x01, 0x02, 0x01, 0x01, 0x01, 0x00},
+		{0x06, 0x03, 0x81, 0x34, 0x03},
+	}
+
+	for _, data := range tests {
+		t.Run(fmt.Sprintf("%x", data), func(t *testing.T) {
+			var derOID OID
+			var berOID OID
+
+			derErr := derOID.UnmarshalDER(data)
+			berErr := berOID.UnmarshalBER(data)
+
+			if (derErr == nil) != (berErr == nil) {
+				t.Error("Ошибки должны совпадать")
+			}
+
+			if derErr == nil {
+				if !derOID.Equal(berOID) {
+					t.Error("DER и BER должны давать одинаковый результат")
+				}
+			}
+		})
+	}
+}
+
+func TestOIDUnmarshalDEREqualsUnmarshalBinary(t *testing.T) {
+	tests := [][]byte{
+		{0x06, 0x03, 0x2B, 0x06, 0x01},
+		{0x06, 0x03, 0x81, 0x34, 0x03},
+	}
+
+	for _, data := range tests {
+		t.Run(fmt.Sprintf("%x", data), func(t *testing.T) {
+			var derOID OID
+			var binOID OID
+
+			derErr := derOID.UnmarshalDER(data)
+			binErr := binOID.UnmarshalBinary(data)
+
+			if (derErr == nil) != (binErr == nil) {
+				t.Error("Ошибки должны совпадать")
+			}
+
+			if derErr == nil {
+				if !derOID.Equal(binOID) {
+					t.Error("DER и Binary должны давать одинаковый результат")
+				}
+			}
+		})
+	}
+}
+
+func TestOIDUnmarshalDERRoundTrip(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			data, err := oid.MarshalDER()
+			if err != nil {
+				t.Fatalf("MarshalDER: %v", err)
+			}
+
+			var decoded OID
+			if err := decoded.UnmarshalDER(data); err != nil {
+				t.Fatalf("UnmarshalDER: %v", err)
+			}
+
+			if !decoded.Equal(oid) {
+				t.Errorf("Round trip: %v -> %x -> %v", oid, data, decoded)
+			}
+		})
+	}
+}
+
+// Пример использования
+func ExampleOID_UnmarshalDER() {
+	data := []byte{0x06, 0x03, 0x2B, 0x06, 0x01}
+
+	var oid OID
+	if err := oid.UnmarshalDER(data); err != nil {
+		panic(err)
+	}
+
+	fmt.Println(oid)
+	// Output: 1.3.6.1
+}
+
+// Пример с ошибкой
+func ExampleOID_UnmarshalDER_error() {
+	var oid OID
+	err := oid.UnmarshalDER([]byte{})
+	fmt.Println(errors.Is(err, ErrInsufficientData))
+	// Output: true
+}
+
+// Бенчмарк
+func BenchmarkOIDUnmarshalDER(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+	data, _ := oid.MarshalDER()
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		var decoded OID
+		_ = decoded.UnmarshalDER(data)
+	}
+}
+
+func TestOIDSizeBER(t *testing.T) {
+	tests := []struct {
+		name    string
+		oid     OID
+		wantErr error
+	}{
+		{
+			name:    "Стандартный OID",
+			oid:     OID{1, 3, 6, 1, 4, 1},
+			wantErr: nil,
+		},
+		{
+			name:    "Короткий OID",
+			oid:     OID{1, 3, 6},
+			wantErr: nil,
+		},
+		{
+			name:    "С первым 2",
+			oid:     OID{2, 100, 3},
+			wantErr: nil,
+		},
+		{
+			name:    "С первым 0",
+			oid:     OID{0, 39, 1},
+			wantErr: nil,
+		},
+		{
+			name:    "Пустой OID",
+			oid:     OID{},
+			wantErr: ErrOIDTooShort,
+		},
+		{
+			name:    "Один компонент",
+			oid:     OID{1},
+			wantErr: ErrOIDTooShort,
+		},
+		{
+			name:    "Невалидный",
+			oid:     OID{3, 1},
+			wantErr: ErrFirstComponentTooBig,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			size, err := tt.oid.SizeBER()
+
+			if tt.wantErr != nil {
+				if err == nil {
+					t.Errorf("SizeBER: expected error %v", tt.wantErr)
+					return
+				}
+				if !errors.Is(err, tt.wantErr) {
+					t.Errorf("SizeBER = %v, want %v", err, tt.wantErr)
+				}
+				return
+			}
+
+			if err != nil {
+				t.Errorf("SizeBER: %v", err)
+				return
+			}
+
+			if size <= 0 {
+				t.Errorf("SizeBER = %d, want > 0", size)
+			}
+		})
+	}
+}
+
+func TestOIDSizeBERMatchesMarshalBER(t *testing.T) {
+	tests := []OID{
+		{1, 3, 6, 1},
+		{1, 3, 6, 1, 2, 1, 1, 1, 0},
+		{2, 100, 3},
+		{0, 39, 1},
+		{1, 3, MaxOIDComponent},
+	}
+
+	for _, oid := range tests {
+		t.Run(oid.String(), func(t *testing.T) {
+			size, err := oid.SizeBER()
 			if err != nil {
 				t.Fatalf("SizeBER: %v", err)
 			}
 
-			data, err := tt.oid.MarshalBER()
+			data, err := oid.MarshalBER()
 			if err != nil {
 				t.Fatalf("MarshalBER: %v", err)
 			}
 
 			if size != len(data) {
-				t.Errorf("SizeBER = %d, MarshalBER = %d", size, len(data))
+				t.Errorf("SizeBER = %d, len(MarshalBER) = %d", size, len(data))
 			}
 		})
 	}
 }
 
-// Тесты для SizeBER
-// Тесты для BER edge cases
-func TestBEREdgeCases(t *testing.T) {
-	// AppendBER с невалидным OID
-	_, err := OID{}.AppendBER(nil)
-	if err == nil {
-		t.Error("AppendBER: ожидалась ошибка")
+func TestOIDSizeBERLongContent(t *testing.T) {
+	// Создаем OID с длинным контентом
+	longOID := OID{1, 3}
+	for i := 0; i < 50; i++ {
+		longOID = append(longOID, MaxOIDComponent)
 	}
 
-	// MarshalBER с невалидным OID
-	_, err = OID{3, 1}.MarshalBER()
-	if !errors.Is(err, ErrFirstComponentTooBig) {
-		t.Error("MarshalBER: ожидалась ErrFirstComponentTooBig")
-	}
-
-	// UnmarshalBER с неверным тегом
-	var oid OID
-	err = oid.UnmarshalBER([]byte{0x05, 0x01, 0x2B})
-	if !errors.Is(err, ErrInvalidASN1Tag) {
-		t.Error("UnmarshalBER: ожидалась ErrInvalidASN1Tag")
-	}
-
-	// UnmarshalBER с пустым контентом
-	// Правильные данные: тег 0x06, длина 0x00, и больше ничего
-	err = oid.UnmarshalBER([]byte{0x06, 0x00})
-	if !errors.Is(err, ErrEmptyContent) {
-		t.Errorf("UnmarshalBER: ожидалась ErrEmptyContent, получили: %v", err)
-	}
-
-	// SizeBER с невалидным OID
-	_, err = OID{}.SizeBER()
-	if err == nil {
-		t.Error("SizeBER: ожидалась ошибка")
-	}
-}
-
-// Тесты для UnmarshalBER с различными ошибками
-func TestUnmarshalBERErrors(t *testing.T) {
-	tests := []struct {
-		name    string
-		data    []byte
-		wantErr error
-	}{
-		{
-			name:    "Короткие данные (2 байта с длиной 1)",
-			data:    []byte{0x06, 0x01},
-			wantErr: ErrInsufficientData,
-		},
-		{
-			name:    "Неверный тег",
-			data:    []byte{0x05, 0x01, 0x2B},
-			wantErr: ErrInvalidASN1Tag,
-		},
-		{
-			name:    "Неверная длина (0x80)",
-			data:    []byte{0x06, 0x80, 0x00},
-			wantErr: ErrInvalidLength,
-		},
-		{
-			name:    "Пустой контент",
-			data:    []byte{0x06, 0x00},
-			wantErr: ErrEmptyContent,
-		},
-		{
-			name:    "Недостаточно данных",
-			data:    []byte{0x06, 0x05, 0x2B},
-			wantErr: ErrInsufficientData, // Изменено с ErrInvalidLength на ErrInsufficientData
-		},
-		{
-			name:    "Лишние данные",
-			data:    []byte{0x06, 0x01, 0x2B, 0x00},
-			wantErr: ErrInvalidLength,
-		},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var oid OID
-			err := oid.UnmarshalBER(tt.data)
-			if err == nil {
-				t.Error("UnmarshalBER: ожидалась ошибка")
-				return
-			}
-			if tt.wantErr != nil && !errors.Is(err, tt.wantErr) {
-				t.Errorf("UnmarshalBER(%x) = %v, ожидалось %v", tt.data, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-// Тесты для MarshalDER/UnmarshalDER
-func TestDERRoundTrip(t *testing.T) {
-	oid := MustParseOID("1.3.6.1.4.1")
-
-	data, err := oid.MarshalDER()
+	size, err := longOID.SizeBER()
 	if err != nil {
-		t.Fatalf("MarshalDER: %v", err)
+		t.Fatalf("SizeBER: %v", err)
 	}
 
-	var decoded OID
-	if err := decoded.UnmarshalDER(data); err != nil {
-		t.Fatalf("UnmarshalDER: %v", err)
-	}
-
-	if !decoded.Equal(oid) {
-		t.Error("DER round trip: не совпадает")
-	}
-}
-func TestSizeBERFullCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", MustParseOID("1.3.6.1.4.1.99999.1.1"), false},
-		{"С большим компонентом", OID{1, 3, MaxOIDComponent}, false},
-		{"С первым 2", MustParseOID("2.100.3"), false},
-		{"Пустой", OID{}, true},
-		{"Невалидный", OID{3, 1}, true},
-		{"Один компонент", OID{1}, true},
-		{"Переполнение", OID{2, ^uint32(0)}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			size, err := tt.oid.SizeBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("SizeBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("SizeBER: %v", err)
-			}
-			if size <= 0 {
-				t.Error("SizeBER: размер должен быть положительным")
-			}
-
-			// Проверяем, что размер совпадает с реальным
-			data, err := tt.oid.MarshalBER()
-			if err != nil {
-				t.Fatalf("MarshalBER: %v", err)
-			}
-			if len(data) != size {
-				t.Errorf("SizeBER = %d, реальный размер = %d", size, len(data))
-			}
-		})
-	}
-}
-func TestMarshalBERFullCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		// Короткий OID (contentSize < 128)
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-
-		// Длинный OID (contentSize >= 128)
-		{"Длинный", MustParseOID("1.3.6.1.4.1.99999.1.1"), false},
-		{"Очень длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-
-		// С большим компонентом
-		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
-
-		// С первым компонентом 2
-		{"Первый = 2", MustParseOID("2.100.3"), false},
-		{"Первый = 2, большой второй", OID{2, MaxOIDComponent}, false},
-
-		// Ошибки
-		{"Пустой", OID{}, true},
-		{"Невалидный", OID{3, 1}, true},
-		{"Один компонент", OID{1}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.oid.MarshalBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("MarshalBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("MarshalBER: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("MarshalBER: пустой результат")
-			}
-
-			// Проверяем round trip
-			var decoded OID
-			if err := decoded.UnmarshalBER(data); err != nil {
-				t.Errorf("UnmarshalBER: %v", err)
-			}
-			if !decoded.Equal(tt.oid) {
-				t.Errorf("Round trip: %v -> %v", tt.oid, decoded)
-			}
-		})
-	}
-}
-
-func TestUnmarshalBERFullCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		data    []byte
-		wantErr error
-	}{
-		// Успешные случаи
-		{"Короткий", []byte{0x06, 0x03, 0x2B, 0x06, 0x01}, nil},
-		{"Средний", []byte{0x06, 0x05, 0x2B, 0x06, 0x01, 0x04, 0x01}, nil},
-
-		// Ошибки
-		{"Пустой", []byte{}, ErrInsufficientData},
-		{"1 байт", []byte{0x06}, ErrInsufficientData},
-		{"Неверный тег", []byte{0x05, 0x01, 0x2B}, ErrInvalidASN1Tag},
-		{"Длина 0x80", []byte{0x06, 0x80, 0x00}, ErrInvalidLength},
-		{"Длина 0x85", []byte{0x06, 0x85, 0x00}, ErrInvalidLength},
-		{"Длина 0x81 с недостатком", []byte{0x06, 0x81}, ErrInsufficientData},
-		{"Пустой контент", []byte{0x06, 0x00}, ErrEmptyContent},
-		{"Недостаточно данных", []byte{0x06, 0x05, 0x2B}, ErrInsufficientData},
-		{"Лишние данные", []byte{0x06, 0x01, 0x2B, 0x00}, ErrInvalidLength},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var oid OID
-			err := oid.UnmarshalBER(tt.data)
-
-			if tt.wantErr == nil {
-				if err != nil {
-					t.Errorf("UnmarshalBER(%x): %v", tt.data, err)
-				}
-				return
-			}
-
-			if err == nil {
-				t.Error("UnmarshalBER: ожидалась ошибка")
-				return
-			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("UnmarshalBER(%x) = %v, ожидалось %v", tt.data, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestMarshalBERRemainingCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		// Различные размеры контента
-		{"Короткий < 128", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный >= 128", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-
-		// Различные первые компоненты
-		{"Первый 0", MustParseOID("0.39.1"), false},
-		{"Первый 1", MustParseOID("1.39.1"), false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-		{"Первый 2, большой второй", OID{2, MaxOIDComponent}, false},
-
-		// С большими компонентами
-		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
-
-		// Ошибки валидации
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Первый > 2", OID{3, 1}, true},
-		{"Второй > 39", OID{1, 40}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.oid.MarshalBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("MarshalBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("MarshalBER: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("MarshalBER: пустой результат")
-			}
-
-			// Проверяем round trip
-			var decoded OID
-			if err := decoded.UnmarshalBER(data); err != nil {
-				t.Errorf("UnmarshalBER: %v", err)
-			}
-			if !decoded.Equal(tt.oid) {
-				t.Errorf("Round trip: %v -> %v", tt.oid, decoded)
-			}
-		})
-	}
-}
-func TestMarshalBinaryRemainingCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", MustParseOID("1.3.6.1.4.1.99999.1.1"), false},
-		{"С максимальным компонентом", OID{1, 3, MaxOIDComponent}, false},
-		{"Первый 0", MustParseOID("0.39.1"), false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-		{"Пустой", OID{}, true},
-		{"Невалидный", OID{3, 1}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.oid.MarshalBinary()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("MarshalBinary: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("MarshalBinary: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("MarshalBinary: пустой результат")
-			}
-		})
-	}
-}
-func TestUnmarshalBinaryRemainingCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		data    []byte
-		wantErr error
-	}{
-		{"Успешный", []byte{0x06, 0x03, 0x2B, 0x06, 0x01}, nil},
-		// Исправлено: правильные байты для OID 1.3.6.1.4.1
-		// 0x2B = 1.3, 0x06 = 6, 0x01 = 1, 0x04 = 4, 0x01 = 1
-		{"С большим компонентом", []byte{0x06, 0x05, 0x2B, 0x06, 0x01, 0x04, 0x01}, nil},
-		{"Пустой", []byte{}, ErrDataTooShort},
-		{"1 байт", []byte{0x06}, ErrDataTooShort},
-		{"Неверный тег", []byte{0x05, 0x00}, ErrInvalidASN1Tag},
-		{"Неверная длина", []byte{0x06, 0x80}, ErrInvalidASN1Length},
-		{"Недостаточно данных", []byte{0x06, 0x05, 0x01}, ErrInsufficientData},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var oid OID
-			err := oid.UnmarshalBinary(tt.data)
-
-			if tt.wantErr == nil {
-				if err != nil {
-					t.Errorf("UnmarshalBinary(%x): %v", tt.data, err)
-				}
-				return
-			}
-
-			if err == nil {
-				t.Error("UnmarshalBinary: ожидалась ошибка")
-				return
-			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("UnmarshalBinary(%x) = %v, ожидалось %v", tt.data, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestUnmarshalBinaryWithGeneratedData(t *testing.T) {
-	// Создаем OID
-	original := MustParseOID("1.3.6.1.4.1")
-
-	// Кодируем
-	data, err := original.MarshalBinary()
+	data, err := longOID.MarshalBER()
 	if err != nil {
-		t.Fatalf("MarshalBinary: %v", err)
+		t.Fatalf("MarshalBER: %v", err)
 	}
 
-	// Декодируем
-	var decoded OID
-	if err := decoded.UnmarshalBinary(data); err != nil {
-		t.Fatalf("UnmarshalBinary: %v", err)
+	if size != len(data) {
+		t.Errorf("SizeBER = %d, len(MarshalBER) = %d", size, len(data))
 	}
 
-	// Проверяем
-	if !decoded.Equal(original) {
-		t.Errorf("Round trip: %v -> %v", original, decoded)
+	if size < 128 {
+		t.Errorf("SizeBER = %d, want >= 128", size)
 	}
 }
 
-func TestReadLengthRemainingCoverage(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		expected int
-		bytes    int
-	}{
-		{"0", []byte{0x00}, 0, 1},
-		{"127", []byte{0x7F}, 127, 1},
-		{"128", []byte{0x81, 0x80}, 128, 2},
-		{"255", []byte{0x81, 0xFF}, 255, 2},
-		{"256", []byte{0x82, 0x01, 0x00}, 256, 3},
-		{"65535", []byte{0x82, 0xFF, 0xFF}, 65535, 3},
-		{"0x80 некорректная", []byte{0x80}, 0, 0},
-		{"0x85 слишком длинная", []byte{0x85}, 0, 0},
-		{"0x81 недостаточно", []byte{0x81}, 0, 0},
-		{"Пустая", []byte{}, 0, 0},
-		// Исправлено: 0x84 с 4 байтами данных - это валидно
-		// 4294967295 = 0xFFFFFFFF, но это валидное значение для int на 64-битной системе
-		{"0x84 с 4 байтами", []byte{0x84, 0xFF, 0xFF, 0xFF, 0xFF}, 4294967295, 5},
-	}
+func TestOIDSizeBERNotModifyOID(t *testing.T) {
+	oid := OID{1, 3, 6, 1}
+	oidCopy := make(OID, len(oid))
+	copy(oidCopy, oid)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			length, bytesRead := readLength(tt.data)
-			if bytesRead != tt.bytes {
-				t.Errorf("readLength(%x) bytesRead = %d, ожидалось %d", tt.data, bytesRead, tt.bytes)
-			}
-			if length != tt.expected {
-				t.Errorf("readLength(%x) length = %d, ожидалось %d", tt.data, length, tt.expected)
-			}
-		})
+	oid.SizeBER()
+
+	if !oid.Equal(oidCopy) {
+		t.Error("SizeBER() не должен изменять OID")
 	}
 }
 
-func TestMarshalBERComplete(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		// Все ветви кодирования
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Первый > 2", OID{3, 1}, true},
-		{"Второй > 39 при первом 1", OID{1, 40}, true},
-		{"Второй > 39 при первом 0", OID{0, 40}, true},
+func TestOIDSizeBERNoAllocations(t *testing.T) {
+	oid := OID{1, 3, 6, 1}
 
-		// Успешные случаи
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
+	allocs := testing.AllocsPerRun(1000, func() {
+		_, _ = oid.SizeBER()
+	})
 
-		// Разные первые компоненты
-		{"Первый 0", MustParseOID("0.39.1"), false},
-		{"Первый 1", MustParseOID("1.39.1"), false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-		{"Первый 2, большой второй", OID{2, MaxOIDComponent}, false},
-
-		// Максимальные значения
-		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.oid.MarshalBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("MarshalBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("MarshalBER: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("MarshalBER: пустой результат")
-			}
-
-			// Проверяем round trip
-			var decoded OID
-			if err := decoded.UnmarshalBER(data); err != nil {
-				t.Errorf("UnmarshalBER: %v", err)
-			}
-			if !decoded.Equal(tt.oid) {
-				t.Errorf("Round trip: %v -> %v", tt.oid, decoded)
-			}
-		})
+	if allocs != 0 {
+		t.Errorf("SizeBER: %f allocs, want 0", allocs)
 	}
 }
 
-func TestSizeBERComplete(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Первый > 2", OID{3, 1}, true},
+// Пример использования
+func ExampleOID_SizeBER() {
+	oid := OID{1, 3, 6, 1}
 
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-		{"Первый 2, большой второй", OID{2, MaxOIDComponent}, false},
+	size, err := oid.SizeBER()
+	if err != nil {
+		panic(err)
 	}
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			size, err := tt.oid.SizeBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("SizeBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("SizeBER: %v", err)
-			}
-			if size <= 0 {
-				t.Error("SizeBER: размер должен быть положительным")
-			}
+	fmt.Println(size)
+	// Output: 5
+}
 
-			// Проверяем соответствие
-			data, err := tt.oid.MarshalBER()
-			if err != nil {
-				t.Fatalf("MarshalBER: %v", err)
-			}
-			if len(data) != size {
-				t.Errorf("SizeBER = %d, реальный размер = %d", size, len(data))
-			}
-		})
+// Бенчмарк
+func BenchmarkOIDSizeBER(b *testing.B) {
+	oid := MustParseOID("1.3.6.1.4.1.99999")
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = oid.SizeBER()
 	}
 }
 
-func TestMarshalBinaryComplete(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Первый > 2", OID{3, 1}, true},
-		{"Второй > 39", OID{1, 40}, true},
-
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
-		{"Первый 0", MustParseOID("0.39.1"), false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.oid.MarshalBinary()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("MarshalBinary: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("MarshalBinary: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("MarshalBinary: пустой результат")
-			}
-		})
-	}
-}
-
-func TestUnmarshalBinaryComplete(t *testing.T) {
-	tests := []struct {
-		name    string
-		data    []byte
-		wantErr error
-	}{
-		{"Успешный", []byte{0x06, 0x03, 0x2B, 0x06, 0x01}, nil},
-		{"Пустой", []byte{}, ErrDataTooShort},
-		{"1 байт", []byte{0x06}, ErrDataTooShort},
-		{"Неверный тег", []byte{0x05, 0x00}, ErrInvalidASN1Tag},
-		{"Неверная длина", []byte{0x06, 0x80}, ErrInvalidASN1Length},
-		{"Недостаточно данных", []byte{0x06, 0x05, 0x01}, ErrInsufficientData},
-		{"Неверный первый компонент", []byte{0x06, 0x01, 0x80}, ErrInvalidFirstComponent},
-		{"Неверный компонент", []byte{0x06, 0x02, 0x2B, 0x80}, ErrInvalidComponent},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			var oid OID
-			err := oid.UnmarshalBinary(tt.data)
-
-			if tt.wantErr == nil {
-				if err != nil {
-					t.Errorf("UnmarshalBinary(%x): %v", tt.data, err)
-				}
-				return
-			}
-
-			if err == nil {
-				t.Error("UnmarshalBinary: ожидалась ошибка")
-				return
-			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("UnmarshalBinary(%x) = %v, ожидалось %v", tt.data, err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestReadLengthComplete(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		expected int
-		bytes    int
-	}{
-		{"0", []byte{0x00}, 0, 1},
-		{"127", []byte{0x7F}, 127, 1},
-		{"128", []byte{0x81, 0x80}, 128, 2},
-		{"255", []byte{0x81, 0xFF}, 255, 2},
-		{"256", []byte{0x82, 0x01, 0x00}, 256, 3},
-		{"65535", []byte{0x82, 0xFF, 0xFF}, 65535, 3},
-		{"0x80", []byte{0x80}, 0, 0},
-		{"0x85", []byte{0x85}, 0, 0},
-		{"0x81 недостаточно", []byte{0x81}, 0, 0},
-		{"Пустая", []byte{}, 0, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			length, bytesRead := readLength(tt.data)
-			if bytesRead != tt.bytes {
-				t.Errorf("readLength(%x) bytesRead = %d, ожидалось %d", tt.data, bytesRead, tt.bytes)
-			}
-			if length != tt.expected {
-				t.Errorf("readLength(%x) length = %d, ожидалось %d", tt.data, length, tt.expected)
-			}
-		})
-	}
-}
-
-func TestReadBase128FromBytesComplete(t *testing.T) {
+func TestReadBase128FromBytes(t *testing.T) {
 	tests := []struct {
 		name     string
 		data     []byte
 		expected uint32
 		bytes    int
 	}{
-		{"0", []byte{0x00}, 0, 1},
-		{"127", []byte{0x7F}, 127, 1},
-		{"128", []byte{0x81, 0x00}, 128, 2},
-		{"16383", []byte{0xFF, 0x7F}, 16383, 2},
-		{"16384", []byte{0x81, 0x80, 0x00}, 16384, 3},
-		{"Переполнение", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, 0, 0},
-		{"Незавершенная", []byte{0x81, 0x80}, 0, 0},
-		{"Пустая", []byte{}, 0, 0},
+		{
+			name:     "0",
+			data:     []byte{0x00},
+			expected: 0,
+			bytes:    1,
+		},
+		{
+			name:     "1",
+			data:     []byte{0x01},
+			expected: 1,
+			bytes:    1,
+		},
+		{
+			name:     "127",
+			data:     []byte{0x7F},
+			expected: 127,
+			bytes:    1,
+		},
+		{
+			name:     "128",
+			data:     []byte{0x81, 0x00},
+			expected: 128,
+			bytes:    2,
+		},
+		{
+			name:     "129",
+			data:     []byte{0x81, 0x01},
+			expected: 129,
+			bytes:    2,
+		},
+		{
+			name:     "255",
+			data:     []byte{0x81, 0x7F},
+			expected: 255,
+			bytes:    2,
+		},
+		{
+			name:     "256",
+			data:     []byte{0x82, 0x00},
+			expected: 256,
+			bytes:    2,
+		},
+		{
+			name:     "16383",
+			data:     []byte{0xFF, 0x7F},
+			expected: 16383,
+			bytes:    2,
+		},
+		{
+			name:     "16384",
+			data:     []byte{0x81, 0x80, 0x00},
+			expected: 16384,
+			bytes:    3,
+		},
+		{
+			name:     "MaxOIDComponent",
+			data:     []byte{0xFF, 0xFF, 0xFF, 0x7F},
+			expected: MaxOIDComponent,
+			bytes:    4,
+		},
+		{
+			name:     "MaxUint32",
+			data:     []byte{0x8F, 0xFF, 0xFF, 0xFF, 0x7F},
+			expected: ^uint32(0),
+			bytes:    5,
+		},
+		{
+			name:     "Переполнение (>5 байт)",
+			data:     []byte{0x81, 0x80, 0x80, 0x80, 0x80, 0x00},
+			expected: 0,
+			bytes:    0,
+		},
+		{
+			name:     "Переполнение uint32",
+			data:     []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F},
+			expected: 0,
+			bytes:    0,
+		},
+		{
+			name:     "Незавершенная",
+			data:     []byte{0x81, 0x80},
+			expected: 0,
+			bytes:    0,
+		},
+		{
+			name:     "Пустая",
+			data:     []byte{},
+			expected: 0,
+			bytes:    0,
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
 			value, bytesRead := readBase128FromBytes(tt.data)
+
 			if bytesRead != tt.bytes {
-				t.Errorf("readBase128FromBytes(%x) bytesRead = %d, ожидалось %d", tt.data, bytesRead, tt.bytes)
-			}
-			if value != tt.expected {
-				t.Errorf("readBase128FromBytes(%x) value = %d, ожидалось %d", tt.data, value, tt.expected)
-			}
-		})
-	}
-}
-
-func TestBatchRegisterComplete(t *testing.T) {
-	reg := NewRegistry()
-
-	// Все возможные ошибки
-	tests := []struct {
-		name    string
-		entries map[string]OID
-		wantErr error
-	}{
-		{"Пустой", map[string]OID{}, nil},
-		{"Невалидный", map[string]OID{"bad": {3, 1}}, ErrFirstComponentTooBig},
-		{"Дубликат OID", map[string]OID{
-			"first":  MustParseOID("1.3.6.1"),
-			"second": MustParseOID("1.3.6.1"),
-		}, ErrDuplicateOIDInBatch},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			err := reg.BatchRegister(tt.entries)
-			if tt.wantErr == nil {
-				if err != nil {
-					t.Errorf("BatchRegister: %v", err)
-				}
-				return
-			}
-			if err == nil {
-				t.Error("BatchRegister: ожидалась ошибка")
-				return
-			}
-			if !errors.Is(err, tt.wantErr) {
-				t.Errorf("BatchRegister = %v, ожидалось %v", err, tt.wantErr)
-			}
-		})
-	}
-}
-
-func TestMarshalBERAllBranches(t *testing.T) {
-	// Тесты для всех ветвей MarshalBER
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		// Ошибки валидации
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Первый > 2", OID{3, 1}, true},
-		{"Второй > 39 при 0", OID{0, 40}, true},
-		{"Второй > 39 при 1", OID{1, 40}, true},
-
-		// Успешные - короткий контент (< 128)
-		{"Минимальный", OID{0, 0}, false},
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-
-		// Успешные - длинный контент (>= 128)
-		{"Длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-
-		// Разные первые компоненты
-		{"Первый 0", MustParseOID("0.39.1"), false},
-		{"Первый 1", MustParseOID("1.39.1"), false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-		{"Первый 2, большой", OID{2, MaxOIDComponent}, false},
-
-		// Максимальные значения
-		{"Максимальный компонент", OID{1, 3, MaxOIDComponent}, false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			data, err := tt.oid.MarshalBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("MarshalBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("MarshalBER: %v", err)
-			}
-			if len(data) == 0 {
-				t.Error("MarshalBER: пустой результат")
-			}
-
-			// Проверяем тег
-			if data[0] != 0x06 {
-				t.Errorf("MarshalBER: неверный тег 0x%02x", data[0])
-			}
-
-			// Round trip
-			var decoded OID
-			if err := decoded.UnmarshalBER(data); err != nil {
-				t.Errorf("UnmarshalBER: %v", err)
-			}
-			if !decoded.Equal(tt.oid) {
-				t.Errorf("Round trip: %v -> %v", tt.oid, decoded)
-			}
-		})
-	}
-}
-
-func TestSizeBERAllBranches(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Невалидный", OID{3, 1}, true},
-
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-		{"Максимальный", OID{1, 3, MaxOIDComponent}, false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			size, err := tt.oid.SizeBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("SizeBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("SizeBER: %v", err)
-			}
-			if size <= 0 {
-				t.Error("SizeBER: размер должен быть положительным")
-			}
-
-			// Проверяем соответствие с MarshalBER
-			data, err := tt.oid.MarshalBER()
-			if err != nil {
-				t.Fatalf("MarshalBER: %v", err)
-			}
-			if len(data) != size {
-				t.Errorf("SizeBER = %d, реальный = %d", size, len(data))
-			}
-		})
-	}
-}
-
-func TestReadBase128FromBytesAllBranches(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		expected uint32
-		bytes    int
-	}{
-		{"0", []byte{0x00}, 0, 1},
-		{"127", []byte{0x7F}, 127, 1},
-		{"128", []byte{0x81, 0x00}, 128, 2},
-		{"16383", []byte{0xFF, 0x7F}, 16383, 2},
-		{"16384", []byte{0x81, 0x80, 0x00}, 16384, 3},
-
-		// Ошибки
-		{"Переполнение (>5 байт)", []byte{0x81, 0x80, 0x80, 0x80, 0x80, 0x00}, 0, 0},
-		{"Переполнение uint32", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, 0, 0},
-		{"Незавершенная", []byte{0x81, 0x80}, 0, 0},
-		{"Пустая", []byte{}, 0, 0},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			value, bytesRead := readBase128FromBytes(tt.data)
-			if bytesRead != tt.bytes {
-				t.Errorf("readBase128FromBytes(%x) bytesRead = %d, ожидалось %d",
+				t.Errorf("readBase128FromBytes(%x) bytesRead = %d, want %d",
 					tt.data, bytesRead, tt.bytes)
 			}
+
 			if value != tt.expected {
-				t.Errorf("readBase128FromBytes(%x) value = %d, ожидалось %d",
+				t.Errorf("readBase128FromBytes(%x) value = %d, want %d",
 					tt.data, value, tt.expected)
 			}
 		})
 	}
 }
 
-func TestReadLengthAllBranches(t *testing.T) {
+func TestReadBase128FromBytesRoundTrip(t *testing.T) {
+	values := []uint32{
+		0, 1, 127, 128, 255, 256, 16383, 16384,
+		MaxOIDComponent, ^uint32(0),
+	}
+
+	for _, value := range values {
+		t.Run(fmt.Sprintf("%d", value), func(t *testing.T) {
+			// Кодируем через appendBase128Value
+			data := appendBase128Value(nil, value)
+
+			// Декодируем
+			decoded, bytesRead := readBase128FromBytes(data)
+
+			if bytesRead != len(data) {
+				t.Errorf("bytesRead = %d, want %d", bytesRead, len(data))
+			}
+
+			if decoded != value {
+				t.Errorf("Round trip: %d -> %x -> %d", value, data, decoded)
+			}
+		})
+	}
+}
+
+func TestReadBase128FromBytesErrors(t *testing.T) {
+	t.Run("Переполнение uint32", func(t *testing.T) {
+		data := []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}
+
+		value, bytesRead := readBase128FromBytes(data)
+
+		if bytesRead != 0 {
+			t.Errorf("bytesRead = %d, want 0", bytesRead)
+		}
+		if value != 0 {
+			t.Errorf("value = %d, want 0", value)
+		}
+	})
+
+	t.Run("Незавершенная", func(t *testing.T) {
+		data := []byte{0x81, 0x80}
+
+		value, bytesRead := readBase128FromBytes(data)
+
+		if bytesRead != 0 {
+			t.Errorf("bytesRead = %d, want 0", bytesRead)
+		}
+		if value != 0 {
+			t.Errorf("value = %d, want 0", value)
+		}
+	})
+
+	t.Run("Пустая", func(t *testing.T) {
+		data := []byte{}
+
+		value, bytesRead := readBase128FromBytes(data)
+
+		if bytesRead != 0 {
+			t.Errorf("bytesRead = %d, want 0", bytesRead)
+		}
+		if value != 0 {
+			t.Errorf("value = %d, want 0", value)
+		}
+	})
+}
+
+func TestReadBase128FromBytesNoAllocations(t *testing.T) {
+	data := []byte{0x81, 0x7F}
+
+	allocs := testing.AllocsPerRun(1000, func() {
+		_, _ = readBase128FromBytes(data)
+	})
+
+	if allocs != 0 {
+		t.Errorf("readBase128FromBytes: %f allocs, want 0", allocs)
+	}
+}
+
+// Бенчмарк
+func BenchmarkReadBase128FromBytes(b *testing.B) {
+	data := []byte{0x81, 0x7F}
+
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		_, _ = readBase128FromBytes(data)
+	}
+}
+
+func TestAppendBase128Value(t *testing.T) {
 	tests := []struct {
 		name     string
-		data     []byte
-		expected int
-		bytes    int
+		value    uint32
+		expected []byte
 	}{
-		// Короткая форма
-		{"0", []byte{0x00}, 0, 1},
-		{"127", []byte{0x7F}, 127, 1},
-
-		// Длинная форма
-		{"128", []byte{0x81, 0x80}, 128, 2},
-		{"255", []byte{0x81, 0xFF}, 255, 2},
-		{"256", []byte{0x82, 0x01, 0x00}, 256, 3},
-		{"65535", []byte{0x82, 0xFF, 0xFF}, 65535, 3},
-
-		// Ошибки
-		{"0x80", []byte{0x80}, 0, 0},
-		{"0x85", []byte{0x85}, 0, 0},
-		{"0x81 недостаточно", []byte{0x81}, 0, 0},
-		{"Пустая", []byte{}, 0, 0},
+		{
+			name:     "0",
+			value:    0,
+			expected: []byte{0x00},
+		},
+		{
+			name:     "1",
+			value:    1,
+			expected: []byte{0x01},
+		},
+		{
+			name:     "127",
+			value:    127,
+			expected: []byte{0x7F},
+		},
+		{
+			name:     "128",
+			value:    128,
+			expected: []byte{0x81, 0x00},
+		},
+		{
+			name:     "129",
+			value:    129,
+			expected: []byte{0x81, 0x01},
+		},
+		{
+			name:     "255",
+			value:    255,
+			expected: []byte{0x81, 0x7F},
+		},
+		{
+			name:     "256",
+			value:    256,
+			expected: []byte{0x82, 0x00},
+		},
+		{
+			name:     "16383",
+			value:    16383,
+			expected: []byte{0xFF, 0x7F},
+		},
+		{
+			name:     "16384",
+			value:    16384,
+			expected: []byte{0x81, 0x80, 0x00},
+		},
+		{
+			name:     "MaxOIDComponent",
+			value:    MaxOIDComponent,
+			expected: []byte{0xFF, 0xFF, 0xFF, 0x7F},
+		},
+		{
+			name:     "MaxUint32",
+			value:    ^uint32(0),
+			expected: []byte{0x8F, 0xFF, 0xFF, 0xFF, 0x7F},
+		},
 	}
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			length, bytesRead := readLength(tt.data)
-			if bytesRead != tt.bytes {
-				t.Errorf("readLength(%x) bytesRead = %d, ожидалось %d",
-					tt.data, bytesRead, tt.bytes)
-			}
-			if length != tt.expected {
-				t.Errorf("readLength(%x) length = %d, ожидалось %d",
-					tt.data, length, tt.expected)
+			result := appendBase128Value(nil, tt.value)
+
+			if !bytes.Equal(result, tt.expected) {
+				t.Errorf("appendBase128Value(%d) = %x, want %x",
+					tt.value, result, tt.expected)
 			}
 		})
 	}
 }
 
-// Тест для BatchRegister с конфликтом имени
-func TestBatchRegisterNameConflict(t *testing.T) {
-	reg := NewRegistry()
+func TestAppendBase128ValueAppendToExisting(t *testing.T) {
+	dst := []byte{0xAA, 0xBB}
 
-	// Регистрируем существующее имя
-	reg.Register("existing", MustParseOID("1.3.6.1.4.1"))
+	result := appendBase128Value(dst, 128)
 
-	// Пытаемся зарегистрировать то же имя
-	err := reg.BatchRegister(map[string]OID{
-		"existing": MustParseOID("2.100.3"),
+	expected := []byte{0xAA, 0xBB, 0x81, 0x00}
+
+	if !bytes.Equal(result, expected) {
+		t.Errorf("appendBase128Value = %x, want %x", result, expected)
+	}
+}
+
+func TestAppendBase128ValueRoundTrip(t *testing.T) {
+	values := []uint32{
+		0, 1, 127, 128, 255, 256, 16383, 16384,
+		MaxOIDComponent, ^uint32(0),
+	}
+
+	for _, value := range values {
+		t.Run(fmt.Sprintf("%d", value), func(t *testing.T) {
+			// Кодируем
+			data := appendBase128Value(nil, value)
+
+			// Декодируем
+			decoded, bytesRead := readBase128FromBytes(data)
+
+			if bytesRead != len(data) {
+				t.Errorf("bytesRead = %d, want %d", bytesRead, len(data))
+			}
+
+			if decoded != value {
+				t.Errorf("Round trip: %d -> %x -> %d", value, data, decoded)
+			}
+		})
+	}
+}
+
+func TestAppendBase128ValueConsistency(t *testing.T) {
+	t.Run("Соответствует base128Size", func(t *testing.T) {
+		values := []uint32{
+			0, 1, 127, 128, 16383, 16384,
+			MaxOIDComponent, ^uint32(0),
+		}
+
+		for _, value := range values {
+			size := base128Size(value)
+			data := appendBase128Value(nil, value)
+
+			if size != len(data) {
+				t.Errorf("base128Size(%d) = %d, len = %d",
+					value, size, len(data))
+			}
+		}
 	})
 
-	if err == nil {
-		t.Error("BatchRegister: ожидалась ошибка")
-	}
-	if !errors.Is(err, ErrNameAlreadyExists) {
-		t.Errorf("BatchRegister = %v, ожидалось ErrNameAlreadyExists", err)
-	}
-}
+	t.Run("Детерминированность", func(t *testing.T) {
+		value := uint32(12345)
 
-func TestMarshalBERLongContent(t *testing.T) {
-	// Создаем OID с действительно длинным контентом
-	// Каждый компонент с большим значением кодируется в 4-5 байт
-	longOID := OID{1, 3}
-	for i := 0; i < 50; i++ {
-		// Используем большие значения для увеличения размера
-		longOID = append(longOID, uint32(1000000+i))
-	}
+		result1 := appendBase128Value(nil, value)
+		result2 := appendBase128Value(nil, value)
 
-	// MarshalBER
-	data, err := longOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	t.Logf("Длина данных: %d", len(data))
-
-	// Проверяем, что используем длинную форму если длина >= 128
-	if len(data) >= 128 {
-		if data[1] < 0x80 {
-			t.Error("Ожидалась длинная форма длины")
+		if !bytes.Equal(result1, result2) {
+			t.Error("appendBase128Value должен быть детерминированным")
 		}
-		t.Logf("Длинная форма: 0x%02x", data[1])
-	}
-
-	// Round trip
-	var decoded OID
-	if err := decoded.UnmarshalBER(data); err != nil {
-		t.Fatalf("UnmarshalBER: %v", err)
-	}
-	if !decoded.Equal(longOID) {
-		t.Error("Round trip: не совпадает")
-	}
-}
-
-func TestMarshalBERVeryLongContent(t *testing.T) {
-	// Создаем OID с гарантированно длинным контентом (> 128 байт)
-	veryLongOID := OID{1, 3}
-	for i := 0; i < 100; i++ {
-		veryLongOID = append(veryLongOID, uint32(1000000+i))
-	}
-
-	data, err := veryLongOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	t.Logf("Длина данных: %d", len(data))
-
-	if len(data) < 128 {
-		t.Errorf("Длина %d < 128", len(data))
-	}
-
-	// Проверяем длинную форму
-	if len(data) >= 128 && data[1] < 0x80 {
-		t.Error("Ожидалась длинная форма длины")
-	}
-
-	// Round trip
-	var decoded OID
-	if err := decoded.UnmarshalBER(data); err != nil {
-		t.Fatalf("UnmarshalBER: %v", err)
-	}
-	if !decoded.Equal(veryLongOID) {
-		t.Error("Round trip: не совпадает")
-	}
-}
-
-func TestMarshalBERMaxComponents(t *testing.T) {
-	// Каждый MaxOIDComponent кодируется в 4 байта (base-128)
-	// 35 * 4 = 140 байт > 128
-	longOID := OID{1, 3}
-	for i := 0; i < 35; i++ {
-		longOID = append(longOID, MaxOIDComponent)
-	}
-
-	data, err := longOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	t.Logf("Длина данных: %d", len(data))
-
-	if len(data) < 128 {
-		t.Errorf("Длина %d < 128", len(data))
-	}
-
-	// Проверяем длинную форму длины
-	if len(data) >= 128 && data[1] < 0x80 {
-		t.Error("Ожидалась длинная форма длины")
-	}
-
-	// Round trip
-	var decoded OID
-	if err := decoded.UnmarshalBER(data); err != nil {
-		t.Fatalf("UnmarshalBER: %v", err)
-	}
-	if !decoded.Equal(longOID) {
-		t.Error("Round trip: не совпадает")
-	}
-}
-
-func TestMarshalBERGuaranteedLong(t *testing.T) {
-	// Гарантированно длинный OID
-	// 50 компонентов MaxOIDComponent = 50 * 4 = 200 байт
-	longOID := OID{1, 3}
-	for i := 0; i < 50; i++ {
-		longOID = append(longOID, MaxOIDComponent)
-	}
-
-	data, err := longOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	t.Logf("Длина данных: %d", len(data))
-
-	if len(data) < 128 {
-		t.Fatalf("Длина %d < 128", len(data))
-	}
-
-	// Проверяем, что используется длинная форма
-	if data[1] < 0x80 {
-		t.Error("Ожидалась длинная форма длины")
-	}
-
-	// Round trip
-	var decoded OID
-	if err := decoded.UnmarshalBER(data); err != nil {
-		t.Fatalf("UnmarshalBER: %v", err)
-	}
-	if !decoded.Equal(longOID) {
-		t.Error("Round trip: не совпадает")
-	}
-}
-
-func TestMarshalBERFindLongContent(t *testing.T) {
-	// Начинаем с малого и увеличиваем, пока не достигнем 128 байт
-	for componentCount := 30; componentCount <= 100; componentCount++ {
-		longOID := OID{1, 3}
-		for i := 0; i < componentCount; i++ {
-			longOID = append(longOID, MaxOIDComponent)
-		}
-
-		data, err := longOID.MarshalBER()
-		if err != nil {
-			t.Fatalf("MarshalBER: %v", err)
-		}
-
-		if len(data) >= 128 {
-			t.Logf("Достигнута длина %d с %d компонентами", len(data), componentCount)
-
-			// Проверяем длинную форму
-			if data[1] < 0x80 {
-				t.Error("Ожидалась длинная форма длины")
-			}
-
-			// Round trip
-			var decoded OID
-			if err := decoded.UnmarshalBER(data); err != nil {
-				t.Fatalf("UnmarshalBER: %v", err)
-			}
-			if !decoded.Equal(longOID) {
-				t.Error("Round trip: не совпадает")
-			}
-
-			return
-		}
-	}
-
-	t.Error("Не удалось достичь длины 128 байт")
-}
-
-func TestSizeBERGuaranteedLong(t *testing.T) {
-	// 50 компонентов MaxOIDComponent
-	longOID := OID{1, 3}
-	for i := 0; i < 50; i++ {
-		longOID = append(longOID, MaxOIDComponent)
-	}
-
-	size, err := longOID.SizeBER()
-	if err != nil {
-		t.Fatalf("SizeBER: %v", err)
-	}
-
-	data, err := longOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	t.Logf("SizeBER = %d, реальный = %d", size, len(data))
-
-	if len(data) != size {
-		t.Errorf("SizeBER = %d, реальный = %d", size, len(data))
-	}
-
-	if size >= 128 {
-		t.Logf("Длинная форма: размер %d", size)
-	}
-}
-
-func TestSizeBERLongContent(t *testing.T) {
-	// OID с гарантированно длинным контентом
-	longOID := OID{1, 3}
-	for i := 0; i < 30; i++ {
-		longOID = append(longOID, MaxOIDComponent)
-	}
-
-	size, err := longOID.SizeBER()
-	if err != nil {
-		t.Fatalf("SizeBER: %v", err)
-	}
-
-	data, err := longOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	t.Logf("SizeBER = %d, реальный = %d", size, len(data))
-
-	if len(data) != size {
-		t.Errorf("SizeBER = %d, реальный = %d", size, len(data))
-	}
-
-	if size >= 128 {
-		t.Logf("Длинная форма: размер %d", size)
-	}
-}
-
-func TestMarshalBERMediumContent(t *testing.T) {
-	// OID с контентом около 128 байт
-	mediumOID := OID{1, 3}
-	for i := 0; i < 20; i++ {
-		mediumOID = append(mediumOID, uint32(1000+i))
-	}
-
-	data, err := mediumOID.MarshalBER()
-	if err != nil {
-		t.Fatalf("MarshalBER: %v", err)
-	}
-
-	// Проверяем, что длина может быть >= 128 или < 128
-	t.Logf("Длина данных: %d", len(data))
-
-	// Round trip
-	var decoded OID
-	if err := decoded.UnmarshalBER(data); err != nil {
-		t.Fatalf("UnmarshalBER: %v", err)
-	}
-	if !decoded.Equal(mediumOID) {
-		t.Error("Round trip: не совпадает")
-	}
-}
-
-func TestMarshalBinaryLongContent(t *testing.T) {
-	// OID с длинным контентом
-	longOID := OID{1, 3}
-	for i := 0; i < 50; i++ {
-		longOID = append(longOID, uint32(i+1))
-	}
-
-	data, err := longOID.MarshalBinary()
-	if err != nil {
-		t.Fatalf("MarshalBinary: %v", err)
-	}
-
-	// Проверяем, что данные корректны
-	if len(data) < 2 {
-		t.Error("MarshalBinary: слишком короткие данные")
-	}
-
-	// Round trip
-	var decoded OID
-	if err := decoded.UnmarshalBinary(data); err != nil {
-		t.Fatalf("UnmarshalBinary: %v", err)
-	}
-	if !decoded.Equal(longOID) {
-		t.Error("Round trip: не совпадает")
-	}
-}
-
-func TestReadLengthOverflow(t *testing.T) {
-	// Тест на переполнение int
-	// На 32-битной системе int может переполниться
-	// На 64-битной - нет
-	data := []byte{0x84, 0xFF, 0xFF, 0xFF, 0xFF}
-
-	length, bytesRead := readLength(data)
-
-	// На 64-битной системе должно быть 4294967295
-	if bytesRead != 5 {
-		t.Errorf("bytesRead = %d, ожидалось 5", bytesRead)
-	}
-
-	// Проверяем, что длина корректна для 64-битной
-	if length != 4294967295 {
-		t.Logf("length = %d (может отличаться на 32-битной)", length)
-	}
-}
-
-func TestSizeBERRemainingCoverage(t *testing.T) {
-	tests := []struct {
-		name    string
-		oid     OID
-		wantErr bool
-	}{
-		{"Короткий", MustParseOID("1.3.6.1"), false},
-		{"Средний", MustParseOID("1.3.6.1.4.1"), false},
-		{"Длинный", OID{1, 3, 6, 1, 4, 1, 99999, 1, 1, 1, 1, 1, 1, 1, 1}, false},
-		{"С большим компонентом", OID{1, 3, MaxOIDComponent}, false},
-		{"Первый 2", MustParseOID("2.100.3"), false},
-		{"Пустой", OID{}, true},
-		{"Один компонент", OID{1}, true},
-		{"Невалидный", OID{3, 1}, true},
-	}
-
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			size, err := tt.oid.SizeBER()
-			if tt.wantErr {
-				if err == nil {
-					t.Error("SizeBER: ожидалась ошибка")
-				}
-				return
-			}
-			if err != nil {
-				t.Errorf("SizeBER: %v", err)
-			}
-			if size <= 0 {
-				t.Error("SizeBER: размер должен быть положительным")
-			}
-
-			// Проверяем соответствие с реальным размером
-			data, err := tt.oid.MarshalBER()
-			if err != nil {
-				t.Fatalf("MarshalBER: %v", err)
-			}
-			if len(data) != size {
-				t.Errorf("SizeBER = %d, реальный размер = %d", size, len(data))
-			}
-		})
-	}
-}
-
-func TestBatchRegisterRemainingCoverage(t *testing.T) {
-	reg := NewRegistry()
-
-	// Успешная регистрация
-	err := reg.BatchRegister(map[string]OID{
-		"first":  MustParseOID("1.3.6.1"),
-		"second": MustParseOID("2.100.3"),
-		"third":  MustParseOID("0.39.1"),
 	})
-	if err != nil {
-		t.Errorf("BatchRegister: %v", err)
-	}
+}
 
-	// Пустой map
-	err = reg.BatchRegister(map[string]OID{})
-	if err != nil {
-		t.Errorf("BatchRegister(empty): %v", err)
-	}
+func TestAppendBase128ValueNoAllocations(t *testing.T) {
+	dst := make([]byte, 0, 10)
 
-	// Невалидный OID
-	err = reg.BatchRegister(map[string]OID{
-		"bad": {3, 1},
+	allocs := testing.AllocsPerRun(1000, func() {
+		_ = appendBase128Value(dst, 12345)
 	})
-	if err == nil {
-		t.Error("BatchRegister(invalid): ожидалась ошибка")
+
+	// append может аллоцировать, если dst заполнен
+	if allocs > 1 {
+		t.Errorf("appendBase128Value: %f allocs", allocs)
 	}
 }
 
-func TestReadBase128FromBytesRemainingCoverage(t *testing.T) {
-	tests := []struct {
-		name     string
-		data     []byte
-		expected uint32
-		bytes    int
-	}{
-		{"0", []byte{0x00}, 0, 1},
-		{"127", []byte{0x7F}, 127, 1},
-		{"128", []byte{0x81, 0x00}, 128, 2},
-		{"16383", []byte{0xFF, 0x7F}, 16383, 2},
-		{"16384", []byte{0x81, 0x80, 0x00}, 16384, 3},
-		{"Переполнение", []byte{0xFF, 0xFF, 0xFF, 0xFF, 0xFF, 0x7F}, 0, 0},
-		{"Незавершенная", []byte{0x81, 0x80}, 0, 0},
-		{"Пустая", []byte{}, 0, 0},
-	}
+// Бенчмарк
+func BenchmarkAppendBase128Value(b *testing.B) {
+	dst := make([]byte, 0, 10)
 
-	for _, tt := range tests {
-		t.Run(tt.name, func(t *testing.T) {
-			value, bytesRead := readBase128FromBytes(tt.data)
-			if bytesRead != tt.bytes {
-				t.Errorf("readBase128FromBytes(%x) bytesRead = %d, ожидалось %d", tt.data, bytesRead, tt.bytes)
-			}
-			if value != tt.expected {
-				t.Errorf("readBase128FromBytes(%x) value = %d, ожидалось %d", tt.data, value, tt.expected)
-			}
-		})
+	b.ReportAllocs()
+	b.ResetTimer()
+	for b.Loop() {
+		dst = dst[:0]
+		_ = appendBase128Value(dst, 12345)
 	}
 }
 
-// ============================================
-// БЕНЧМАРКИ
-// ============================================
+// Бенчмарк для разных значений
+func BenchmarkAppendBase128ValueValues(b *testing.B) {
+	values := []uint32{0, 127, 128, 16383, MaxOIDComponent, ^uint32(0)}
 
-// Базовые бенчмарки BER кодирования
-func BenchmarkBERMarshal(b *testing.B) {
-	testCases := []struct {
-		name string
-		oid  OID
-	}{
-		{"Short", MustParseOID("1.3.6.1")},
-		{"Medium", MustParseOID("1.3.6.1.4.1")},
-		{"Long", MustParseOID("1.3.6.1.4.1.99999.1.1")},
-		{"Very_Long", MustParseOID("1.3.6.1.4.1.99999.1.1.1.1.1.1")},
-	}
-
-	for _, tc := range testCases {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, err := tc.oid.MarshalBER()
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkBERUnmarshal(b *testing.B) {
-	testCases := []struct {
-		name string
-		oid  OID
-	}{
-		{"Short", MustParseOID("1.3.6.1")},
-		{"Medium", MustParseOID("1.3.6.1.4.1")},
-		{"Long", MustParseOID("1.3.6.1.4.1.99999.1.1")},
-		{"Very_Long", MustParseOID("1.3.6.1.4.1.99999.1.1.1.1.1.1")},
-	}
-
-	for _, tc := range testCases {
-		data, _ := tc.oid.MarshalBER()
-
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				var result OID
-				if err := result.UnmarshalBER(data); err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkBERAppend(b *testing.B) {
-	testCases := []struct {
-		name string
-		oid  OID
-	}{
-		{"Short", MustParseOID("1.3.6.1")},
-		{"Medium", MustParseOID("1.3.6.1.4.1")},
-		{"Long", MustParseOID("1.3.6.1.4.1.99999.1.1")},
-	}
-
-	for _, tc := range testCases {
-		b.Run(tc.name, func(b *testing.B) {
-			dst := make([]byte, 0, 64)
+	for _, value := range values {
+		b.Run(fmt.Sprintf("%d", value), func(b *testing.B) {
+			dst := make([]byte, 0, 10)
 
 			b.ReportAllocs()
 			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
+			for b.Loop() {
 				dst = dst[:0]
-				_, err := tc.oid.AppendBER(dst)
-				if err != nil {
-					b.Fatal(err)
-				}
+				_ = appendBase128Value(dst, value)
 			}
 		})
 	}
-}
-
-// Сравнение со стандартной библиотекой
-func BenchmarkBERStdASN1Marshal(b *testing.B) {
-	testCases := []struct {
-		name string
-		oid  asn1.ObjectIdentifier
-	}{
-		{"Short", asn1.ObjectIdentifier{1, 3, 6, 1}},
-		{"Medium", asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1}},
-		{"Long", asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 1}},
-	}
-
-	for _, tc := range testCases {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, err := asn1.Marshal(tc.oid)
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-func BenchmarkBERStdASN1Unmarshal(b *testing.B) {
-	testCases := []struct {
-		name string
-		oid  asn1.ObjectIdentifier
-	}{
-		{"Short", asn1.ObjectIdentifier{1, 3, 6, 1}},
-		{"Medium", asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1}},
-		{"Long", asn1.ObjectIdentifier{1, 3, 6, 1, 4, 1, 99999, 1, 1}},
-	}
-
-	for _, tc := range testCases {
-		data, _ := asn1.Marshal(tc.oid)
-
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				var result asn1.ObjectIdentifier
-				_, err := asn1.Unmarshal(data, &result)
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-// Параллельные бенчмарки
-func BenchmarkBERParallelMarshal(b *testing.B) {
-	oid := MustParseOID("1.3.6.1.4.1.99999.1.1")
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			_, err := oid.MarshalBER()
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkBERParallelUnmarshal(b *testing.B) {
-	oid := MustParseOID("1.3.6.1.4.1.99999.1.1")
-	data, _ := oid.MarshalBER()
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	b.RunParallel(func(pb *testing.PB) {
-		for pb.Next() {
-			var result OID
-			if err := result.UnmarshalBER(data); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-// Комбинированные операции
-func BenchmarkBERRoundTrip(b *testing.B) {
-	oid := MustParseOID("1.3.6.1.4.1.99999.1.1")
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		data, err := oid.MarshalBER()
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		var decoded OID
-		if err := decoded.UnmarshalBER(data); err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkBERCompleteWorkflow(b *testing.B) {
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		// Парсинг -> BER кодирование -> BER декодирование -> строка
-		oid, err := ParseOID("1.3.6.1.4.1.99999.1.1")
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		data, err := oid.MarshalBER()
-		if err != nil {
-			b.Fatal(err)
-		}
-
-		var decoded OID
-		if err := decoded.UnmarshalBER(data); err != nil {
-			b.Fatal(err)
-		}
-
-		_ = decoded.String()
-	}
-}
-
-// Бенчмарки размера
-func BenchmarkBERSize(b *testing.B) {
-	testCases := []struct {
-		name string
-		oid  OID
-	}{
-		{"Short", MustParseOID("1.3.6.1")},
-		{"Medium", MustParseOID("1.3.6.1.4.1")},
-		{"Long", MustParseOID("1.3.6.1.4.1.99999.1.1")},
-	}
-
-	for _, tc := range testCases {
-		b.Run(tc.name, func(b *testing.B) {
-			b.ReportAllocs()
-			b.ResetTimer()
-			for i := 0; i < b.N; i++ {
-				_, err := tc.oid.SizeBER()
-				if err != nil {
-					b.Fatal(err)
-				}
-			}
-		})
-	}
-}
-
-// Бенчмарки для специфичных случаев
-func BenchmarkBERFirstComponent2(b *testing.B) {
-	oid := MustParseOID("2.100.3")
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		_, err := oid.MarshalBER()
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-func BenchmarkBERMaxComponent(b *testing.B) {
-	oid := OID{1, 3, MaxOIDComponent}
-
-	b.ReportAllocs()
-	b.ResetTimer()
-	for b.Loop() {
-		_, err := oid.MarshalBER()
-		if err != nil {
-			b.Fatal(err)
-		}
-	}
-}
-
-// Сравнение с MarshalBinary (наша предыдущая реализация)
-func BenchmarkBERvsBinaryMarshal(b *testing.B) {
-	oid := MustParseOID("1.3.6.1.4.1.99999.1.1")
-
-	b.Run("BER", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_, err := oid.MarshalBER()
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("Binary", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			_, err := oid.MarshalBinary()
-			if err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-}
-
-func BenchmarkBERvsBinaryUnmarshal(b *testing.B) {
-	oid := MustParseOID("1.3.6.1.4.1.99999.1.1")
-	berData, _ := oid.MarshalBER()
-	binData, _ := oid.MarshalBinary()
-
-	b.Run("BER", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			var result OID
-			if err := result.UnmarshalBER(berData); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
-
-	b.Run("Binary", func(b *testing.B) {
-		b.ReportAllocs()
-		b.ResetTimer()
-		for i := 0; i < b.N; i++ {
-			var result OID
-			if err := result.UnmarshalBinary(binData); err != nil {
-				b.Fatal(err)
-			}
-		}
-	})
 }

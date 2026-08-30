@@ -88,9 +88,12 @@ linters:
           - gosec
           - exhaustruct
           - staticcheck
+          - revive
           - err113
           - errcheck
+          - govet
           - funlen
+          - prealloc
         path: _test\.go
 
 formatters:
