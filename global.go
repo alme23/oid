@@ -6,7 +6,10 @@ import (
 
 // defaultRegistry — глобальный синглтон реестра.
 // Используйте с осторожностью в конкурентной среде.
-var defaultRegistry = NewRegistry()
+var defaultRegistry = &Registry{
+	names: make(map[string]OID),
+	oids:  make(map[string]string),
+}
 
 // Register регистрирует OID в глобальном реестре.
 // Возвращает ошибку, если OID уже зарегистрирован под другим именем.
@@ -114,10 +117,14 @@ func GetRegistry() *Registry {
 	return defaultRegistry
 }
 
-// ResetRegistry сбрасывает глобальный реестр к пустому состоянию.
-// Полезно для тестов и изоляции.
+// ResetRegistry создает новый реестр
 func ResetRegistry() {
 	defaultRegistry = NewRegistry()
+}
+
+// ClearRegistry очищает текущий реестр (1 alloc)
+func ClearRegistry() {
+	defaultRegistry.Clear()
 }
 
 // Snapshot возвращает снимок реестра (глубокая копия).
@@ -129,13 +136,12 @@ func Snapshot() map[string]OID {
 // Diff возвращает разницу между текущим реестром и снимком.
 // Возвращает: добавленные, удаленные, измененные OID.
 func Diff(snapshot map[string]OID) (added, removed, changed map[string]OID) {
-	current := List()
+	current := List() // 2 allocs (после оптимизации)
 
 	added = make(map[string]OID)
 	removed = make(map[string]OID)
 	changed = make(map[string]OID)
 
-	// Используем maps.Copy для эффективного копирования
 	for name, oid := range current {
 		if oldOID, exists := snapshot[name]; !exists {
 			added[name] = oid

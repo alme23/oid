@@ -2,7 +2,6 @@ package oid
 
 import (
 	"database/sql/driver"
-	"encoding/json"
 	"fmt"
 	"strings"
 )
@@ -152,28 +151,20 @@ func (oa Array) Value() (driver.Value, error) {
 		return "{}", nil
 	}
 
-	size := 2 // фигурные скобки
+	var builder strings.Builder
+	builder.Grow(len(oa) * 10)
+	builder.WriteByte('{')
 	for i, oid := range oa {
 		if i > 0 {
-			size++ // запятая
+			builder.WriteByte(',')
 		}
 		if err := oid.Validate(); err != nil {
 			return nil, fmt.Errorf("%w: позиция %d: %w", ErrInvalidArrayOID, i, err)
 		}
-		size += len(oid.String())
+		oid.AppendString(&builder)
 	}
-
-	buf := make([]byte, 0, size)
-	buf = append(buf, '{')
-	for i, oid := range oa {
-		if i > 0 {
-			buf = append(buf, ',')
-		}
-		buf = append(buf, oid.String()...)
-	}
-	buf = append(buf, '}')
-
-	return string(buf), nil
+	builder.WriteByte('}')
+	return builder.String(), nil
 }
 
 // Scan реализует интерфейс sql.Scanner для OIDArray
@@ -203,15 +194,20 @@ func (oa *Array) Scan(value any) error {
 	}
 
 	content := s[1 : len(s)-1]
-	parts := splitPostgresArray(content)
-
-	result := make(Array, 0, len(parts))
-	for _, part := range parts {
-		oid, err := ParseOID(part)
-		if err != nil {
-			return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, part, err)
+	var result Array
+	start := 0
+	for i := 0; i <= len(content); i++ {
+		if i == len(content) || content[i] == ',' {
+			part := content[start:i]
+			if part != "" {
+				oid, err := ParseOID(part)
+				if err != nil {
+					return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, part, err)
+				}
+				result = append(result, oid)
+			}
+			start = i + 1
 		}
-		result = append(result, oid)
 	}
 
 	*oa = result
@@ -224,19 +220,19 @@ func (oa Array) MarshalJSON() ([]byte, error) {
 		return []byte("[]"), nil
 	}
 
-	buf := make([]byte, 0, len(oa)*10)
-	buf = append(buf, '[')
+	var builder strings.Builder
+	builder.Grow(len(oa) * 10)
+	builder.WriteByte('[')
 	for i, oid := range oa {
 		if i > 0 {
-			buf = append(buf, ',')
+			builder.WriteByte(',')
 		}
-		buf = append(buf, '"')
-		buf = append(buf, oid.String()...)
-		buf = append(buf, '"')
+		builder.WriteByte('"')
+		oid.AppendString(&builder)
+		builder.WriteByte('"')
 	}
-	buf = append(buf, ']')
-
-	return buf, nil
+	builder.WriteByte(']')
+	return []byte(builder.String()), nil
 }
 
 // UnmarshalJSON реализует json.Unmarshaler для OIDArray
@@ -246,18 +242,45 @@ func (oa *Array) UnmarshalJSON(data []byte) error {
 		return nil
 	}
 
-	var strArray []string
-	if err := json.Unmarshal(data, &strArray); err != nil {
-		return fmt.Errorf("%w: %w", ErrJSONDecodeArray, err)
+	// Ручной парсинг JSON массива
+	s := string(data)
+	if len(s) < 2 || s[0] != '[' || s[len(s)-1] != ']' {
+		return fmt.Errorf("%w: %s", ErrJSONDecodeArray, s)
 	}
 
-	result := make(Array, 0, len(strArray))
-	for _, s := range strArray {
-		oid, err := ParseOID(s)
-		if err != nil {
-			return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, s, err)
+	content := s[1 : len(s)-1]
+	var result Array
+	start := 0
+	inQuotes := false
+	for i := 0; i < len(content); i++ {
+		switch content[i] {
+		case '"':
+			inQuotes = !inQuotes
+		case ',':
+			if !inQuotes {
+				part := content[start:i]
+				part = strings.Trim(part, `" `)
+				if part != "" {
+					oid, err := ParseOID(part)
+					if err != nil {
+						return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, part, err)
+					}
+					result = append(result, oid)
+				}
+				start = i + 1
+			}
 		}
-		result = append(result, oid)
+	}
+	// Последний элемент
+	if start < len(content) {
+		part := strings.Trim(content[start:], `" `)
+		if part != "" {
+			oid, err := ParseOID(part)
+			if err != nil {
+				return fmt.Errorf("%w: '%s': %w", ErrDatabaseParse, part, err)
+			}
+			result = append(result, oid)
+		}
 	}
 
 	*oa = result
@@ -271,15 +294,15 @@ func (oa Array) String() string {
 	}
 
 	var builder strings.Builder
+	builder.Grow(len(oa) * 10)
 	builder.WriteByte('[')
 	for i, oid := range oa {
 		if i > 0 {
 			builder.WriteString(", ")
 		}
-		builder.WriteString(oid.String())
+		oid.AppendString(&builder)
 	}
 	builder.WriteByte(']')
-
 	return builder.String()
 }
 

@@ -330,6 +330,16 @@ func (o *OID) UnmarshalJSON(data []byte) (err error) {
 	return nil
 }
 
+// AppendString пишет OID в builder без аллокаций
+func (o OID) AppendString(builder *strings.Builder) {
+	for i, v := range o {
+		if i > 0 {
+			builder.WriteByte('.')
+		}
+		builder.WriteString(strconv.FormatUint(uint64(v), 10))
+	}
+}
+
 // digitCount возвращает количество цифр в числе
 func digitCount(n uint32) (count int) {
 	switch {

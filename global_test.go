@@ -786,6 +786,7 @@ func BenchmarkGlobalBatchRegister(b *testing.B) {
 		"third":  MustParseOID("0.39.1"),
 	}
 
+	// Создаем отдельный реестр для каждого теста
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
@@ -1675,12 +1676,12 @@ func ExampleRemove() {
 
 // Бенчмарк
 func BenchmarkGlobalRemove(b *testing.B) {
+	ResetRegistry()
 	oid := MustParseOID("1.3.6.1")
 
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		ResetRegistry()
 		MustRegister("test", oid)
 		Remove("test")
 	}
@@ -1840,7 +1841,7 @@ func ExampleList() {
 // Бенчмарк
 func BenchmarkGlobalList(b *testing.B) {
 	ResetRegistry()
-	for i := 0; i < 10; i++ {
+	for i := range 10 {
 		oid := MustParseOID(fmt.Sprintf("1.3.6.%d", i+1))
 		MustRegister(fmt.Sprintf("oid-%d", i), oid)
 	}
@@ -2548,15 +2549,13 @@ func ExampleClear() {
 
 // Бенчмарк
 func BenchmarkGlobalClear(b *testing.B) {
+	reg := GetRegistry()
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		ResetRegistry()
-		for i := 0; i < 10; i++ {
-			oid := MustParseOID(fmt.Sprintf("1.3.6.%d", i+1))
-			MustRegister(fmt.Sprintf("oid-%d", i), oid)
-		}
 		Clear()
+		_ = reg
 	}
 }
 

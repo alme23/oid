@@ -164,13 +164,13 @@ func (c ColumnarOID) Equal(other ColumnarOID) bool {
 	return true
 }
 
-// MarshalBinary кодирует в DER
+// MarshalBinary encodes to DER
 func (c ColumnarOID) MarshalBinary() ([]byte, error) {
 	return c.FullOID().MarshalBinary()
 }
 
-// UnmarshalBinary декодирует из DER
-// ВАЖНО: Требует указания base OID
+// UnmarshalBinary decodes  from DER
+// IMPORTANT: base OID MUST be set
 func (c *ColumnarOID) UnmarshalBinary(data []byte, base OID) error {
 	var o OID
 	if err := o.UnmarshalBinary(data); err != nil {
@@ -185,27 +185,27 @@ func (c *ColumnarOID) UnmarshalBinary(data []byte, base OID) error {
 	return nil
 }
 
-// MarshalBER кодирует в BER
+// MarshalBER encodes to BER
 func (c ColumnarOID) MarshalBER() ([]byte, error) {
 	return c.FullOID().MarshalBER()
 }
 
-// MarshalJSON кодирует в JSON
+// MarshalJSON encodes to JSON
 func (c ColumnarOID) MarshalJSON() ([]byte, error) {
 	return c.FullOID().MarshalJSON()
 }
 
-// UnmarshalJSON декодирует из JSON
-// ВАЖНО: Использует Base из текущего объекта
+// UnmarshalJSON decodes from JSON
+// IMPORTANT: uses Base from current object
 func (c *ColumnarOID) UnmarshalJSON(data []byte) error {
 	var o OID
 	if err := o.UnmarshalJSON(data); err != nil {
 		return err
 	}
 
-	// Если Base не установлен, пытаемся использовать полный OID
+	// if Base not set, try to use full OID
 	if len(c.Base) == 0 {
-		// Просто сохраняем как полный OID
+		// keep as full OID
 		parsed := ColumnarOID{
 			Base:    o,
 			Column:  0,

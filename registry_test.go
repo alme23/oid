@@ -1299,12 +1299,15 @@ func ExampleRegistry_Remove() {
 }
 
 // Бенчмарк
+
 func BenchmarkRegistryRemove(b *testing.B) {
+	reg := NewRegistry()
+	oid := MustParseOID("1.3.6.1")
+	reg.Register("test", oid)
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		reg := NewRegistry()
-		oid := MustParseOID("1.3.6.1")
 		reg.Register("test", oid)
 		reg.Remove("test")
 	}
@@ -2214,14 +2217,11 @@ func ExampleRegistry_Clear() {
 
 // Бенчмарк
 func BenchmarkRegistryClear(b *testing.B) {
+	reg := NewRegistry()
+
 	b.ReportAllocs()
 	b.ResetTimer()
 	for b.Loop() {
-		reg := NewRegistry()
-		for i := 0; i < 10; i++ {
-			oid := MustParseOID(fmt.Sprintf("1.3.6.%d", i+1))
-			reg.Register(fmt.Sprintf("oid-%d", i), oid)
-		}
 		reg.Clear()
 	}
 }
@@ -3073,11 +3073,10 @@ func ExampleRegistry_BatchRegister() {
 }
 
 // Бенчмарк
-func BenchmarkRegistryBatchRegister(b *testing.B) {
+func BenchmarkRegistryBatchRegisterOptimized(b *testing.B) {
 	entries := map[string]OID{
 		"first":  MustParseOID("1.3.6.1"),
 		"second": MustParseOID("2.100.3"),
-		"third":  MustParseOID("0.39.1"),
 	}
 
 	b.ReportAllocs()

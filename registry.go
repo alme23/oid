@@ -87,6 +87,7 @@ func (r *Registry) Remove(name string) (removed bool) {
 		return false
 	}
 
+	// Используем String() только один раз
 	key := oid.String()
 	delete(r.names, name)
 	delete(r.oids, key)
@@ -98,16 +99,21 @@ func (r *Registry) List() (result map[string]OID) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
+	// Вычисляем общий размер
+	totalSize := 0
+	for _, oid := range r.names {
+		totalSize += len(oid)
+	}
+
+	// Один слайс для всех данных
+	allData := make([]uint32, totalSize)
 	result = make(map[string]OID, len(r.names))
 
-	// Поверхностное копирование через maps.Copy
-	maps.Copy(result, r.names)
-
-	// Глубокое копирование OID
-	for name, oid := range result {
-		oidCopy := make(OID, len(oid))
-		copy(oidCopy, oid)
-		result[name] = oidCopy
+	pos := 0
+	for name, oid := range r.names {
+		copy(allData[pos:], oid)
+		result[name] = allData[pos : pos+len(oid)]
+		pos += len(oid)
 	}
 
 	return result
@@ -146,8 +152,13 @@ func (r *Registry) Clear() {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	r.names = make(map[string]OID)
-	r.oids = make(map[string]string)
+	// Переиспользуем существующие map, очищая их
+	for k := range r.names {
+		delete(r.names, k)
+	}
+	for k := range r.oids {
+		delete(r.oids, k)
+	}
 }
 
 // Names возвращает срез всех зарегистрированных имен
@@ -167,12 +178,23 @@ func (r *Registry) OIDs() (oids []OID) {
 	r.mu.RLock()
 	defer r.mu.RUnlock()
 
-	oids = make([]OID, 0, len(r.names))
+	// Вычисляем общий размер
+	totalSize := 0
 	for _, oid := range r.names {
-		oidCopy := make(OID, len(oid))
-		copy(oidCopy, oid)
-		oids = append(oids, oidCopy)
+		totalSize += len(oid)
 	}
+
+	// Один слайс для всех данных
+	allData := make([]uint32, totalSize)
+	oids = make([]OID, 0, len(r.names))
+
+	pos := 0
+	for _, oid := range r.names {
+		copy(allData[pos:], oid)
+		oids = append(oids, allData[pos:pos+len(oid)])
+		pos += len(oid)
+	}
+
 	return oids
 }
 
@@ -194,54 +216,43 @@ func (r *Registry) BatchRegister(entries map[string]OID) (err error) {
 		return nil
 	}
 
-	type preparedEntry struct {
-		name    string
-		oidCopy OID
-		key     string
-	}
-
-	prepared := make([]preparedEntry, 0, len(entries))
+	// Предварительно вычисляем ключи (1 раз)
+	keys := make(map[string]string, len(entries))
 	for name, oid := range entries {
 		if err := oid.Validate(); err != nil {
 			return err
 		}
-
-		oidCopy := make(OID, len(oid))
-		copy(oidCopy, oid)
-		key := oidCopy.String()
-
-		prepared = append(prepared, preparedEntry{
-			name:    name,
-			oidCopy: oidCopy,
-			key:     key,
-		})
+		keys[name] = oid.String()
 	}
 
 	r.mu.Lock()
 	defer r.mu.Unlock()
 
-	seenKeys := make(map[string]struct{}, len(prepared))
-
-	for _, entry := range prepared {
-		// Проверяем дубликаты OID внутри пакета
-		if _, duplicate := seenKeys[entry.key]; duplicate {
-			return fmt.Errorf("%w: '%s'", ErrDuplicateOIDInBatch, entry.oidCopy)
+	// Проверяем дубликаты
+	seenKeys := make(map[string]struct{}, len(entries))
+	for _, key := range keys {
+		if _, dup := seenKeys[key]; dup {
+			return fmt.Errorf("%w: '%s'", ErrDuplicateOIDInBatch, key)
 		}
-
-		// Проверяем конфликты с существующими
-		if _, exists := r.names[entry.name]; exists {
-			return fmt.Errorf("%w: '%s'", ErrNameAlreadyExists, entry.name)
-		}
-		if existingName, exists := r.oids[entry.key]; exists {
-			return fmt.Errorf("%w: %s как '%s'", ErrOIDAlreadyRegistered, entry.oidCopy, existingName)
-		}
-
-		seenKeys[entry.key] = struct{}{}
+		seenKeys[key] = struct{}{}
 	}
 
-	for _, entry := range prepared {
-		r.names[entry.name] = entry.oidCopy
-		r.oids[entry.key] = entry.name
+	// Проверяем конфликты
+	for name, key := range keys {
+		if _, exists := r.names[name]; exists {
+			return fmt.Errorf("%w: '%s'", ErrNameAlreadyExists, name)
+		}
+		if _, exists := r.oids[key]; exists {
+			return fmt.Errorf("%w: %s", ErrOIDAlreadyRegistered, key)
+		}
+	}
+
+	// Регистрируем
+	for name, oid := range entries {
+		oidCopy := make(OID, len(oid))
+		copy(oidCopy, oid)
+		r.names[name] = oidCopy
+		r.oids[keys[name]] = name
 	}
 
 	return nil
